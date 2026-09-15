@@ -191,9 +191,9 @@ cython_debug/
 .cursorindexingignore
 
 # 학습된 모델 파일
-models/
-*.pkl
-*.joblib
+#models/
+#*.pkl
+#*.joblib
 
 # markdown
 ANALYSIS_FLOW.md

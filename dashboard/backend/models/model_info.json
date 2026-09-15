@@ -1,0 +1,40 @@
+{
+  "model_version": "v1.1.0",
+  "model_file": "final_rf_part_balanced.pkl",
+  "model_type": "RandomForestClassifier",
+  "pipeline": [
+    "StandardScaler",
+    "RandomForestClassifier(class_weight=balanced)"
+  ],
+  "supported_parts": [
+    "CN7LH",
+    "CN7RH",
+    "RG3LH",
+    "RG3RH"
+  ],
+  "feature_count": 26,
+  "default_threshold": 0.163,
+  "allowed_threshold_range": [
+    0.079,
+    0.639
+  ],
+  "data_corrections": {
+    "average_screw_rpm": "100 초과 값은 10으로 나눔 (mm/s 기준, Average <= Max 위반 3021건 -> 0건)",
+    "back_pressure": "행별로 Average=min, Max=max로 재구성 (위반 5212건 -> 0건)",
+    "dropped_columns": [
+      "Clamp_Open_Position"
+    ],
+    "note": "utils/preprocessing.py의 apply_data_corrections와 동일 규칙. 예측 서버도 같은 함수를 사용해야 함"
+  },
+  "validation": {
+    "method": "전체 5230건 5-fold x 3반복 교차검증 (같은 기간 교차검증 기준)",
+    "records": 5230,
+    "defects": 60,
+    "average_precision_mean": 0.3931,
+    "average_precision_std": 0.1107,
+    "warning": "불량 60건, 불량 에피소드 6개. 생산일 단위로 분할하면 AP가 0.02 수준으로 떨어진다(ANALYSIS_RESULTS.md 11절). 새로운 기간에 대한 성능은 표본검사로 확인해야 한다.",
+    "daily_production_records": 402,
+    "daily_defect_expectation": 4.62,
+    "daily_basis_note": "하루 기준 건수는 라벨 데이터 5,230건 / 생산일 13일 = 하루 평균 402건을 기준으로 환산한 값이다. 시연 표본(150건)이나 재생 진행 건수와는 다른 기준이다."
+  }
+}

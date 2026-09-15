@@ -1,0 +1,174 @@
+{
+  "model_version": "v1.1.0",
+  "created_at": "2026-09-14T18:20:20",
+  "model_file": "final_rf_part_balanced.pkl",
+  "feature_file": "final_feature_columns.pkl",
+  "estimator": "Pipeline(StandardScaler, RandomForestClassifier)",
+  "hyperparameters": {
+    "n_estimators": 300,
+    "max_depth": 20,
+    "min_samples_split": 2,
+    "min_samples_leaf": 4,
+    "class_weight": "balanced",
+    "random_state": 0
+  },
+  "training_data": {
+    "source": "labeled_modeling.csv (02_EDA 전처리 결과)",
+    "rows": 5230,
+    "defects": 60,
+    "defect_rate": 0.011472275334608031,
+    "part_names": [
+      "CN7 W/S SIDE MLD'G LH",
+      "CN7 W/S SIDE MLD'G RH",
+      "RG3 MOLD'G W/SHLD, LH",
+      "RG3 MOLD'G W/SHLD, RH"
+    ]
+  },
+  "feature_columns": [
+    "Injection_Time",
+    "Filling_Time",
+    "Plasticizing_Time",
+    "Cycle_Time",
+    "Clamp_Close_Time",
+    "Cushion_Position",
+    "Plasticizing_Position",
+    "Max_Injection_Speed",
+    "Max_Screw_RPM",
+    "Average_Screw_RPM",
+    "Max_Injection_Pressure",
+    "Max_Switch_Over_Pressure",
+    "Max_Back_Pressure",
+    "Average_Back_Pressure",
+    "Barrel_Temperature_1",
+    "Barrel_Temperature_2",
+    "Barrel_Temperature_3",
+    "Barrel_Temperature_4",
+    "Barrel_Temperature_5",
+    "Barrel_Temperature_6",
+    "Hopper_Temperature",
+    "Mold_Temperature_3",
+    "Mold_Temperature_4",
+    "Part_CN7RH",
+    "Part_RG3LH",
+    "Part_RG3RH"
+  ],
+  "categorical_encoding": {
+    "source_column": "PART_NAME",
+    "derived_column": "Part",
+    "rule": "PART_NAME[:3] + PART_NAME[-2:]",
+    "dummy_columns": [
+      "Part_CN7RH",
+      "Part_RG3LH",
+      "Part_RG3RH"
+    ],
+    "baseline_category": "CN7LH",
+    "note": "drop_first=True 이므로 CN7LH는 더미 3개가 모두 0인 상태로 표현됨"
+  },
+  "recommended_threshold": 0.163,
+  "recommended_inspect_ratio": 0.1,
+  "performance": {
+    "protocol": "5-fold x 3반복 (04_6_AutoEncoder_CV_Validation)",
+    "average_precision_mean": 0.3931,
+    "average_precision_std": 0.1107,
+    "note": "전체 5230건 기준 반복 CV 결과이며, 이 모델은 같은 데이터 전체로 재학습한 것임"
+  },
+  "operating_points": [
+    {
+      "검사 비율": 0.01,
+      "검사 수": 52,
+      "Threshold mean": 0.6385602161,
+      "Threshold std": 0.0123841634,
+      "Recall@k 평균": 0.3222222222,
+      "Recall@k 표준편차": 0.0346944333,
+      "Precision@k 평균": 0.3717948718,
+      "Lift 평균": 32.4081196581
+    },
+    {
+      "검사 비율": 0.02,
+      "검사 수": 105,
+      "Threshold mean": 0.4968648378,
+      "Threshold std": 0.0057722199,
+      "Recall@k 평균": 0.4055555556,
+      "Recall@k 표준편차": 0.0419435246,
+      "Precision@k 평균": 0.2317460317,
+      "Lift 평균": 20.2005291005
+    },
+    {
+      "검사 비율": 0.03,
+      "검사 수": 157,
+      "Threshold mean": 0.4215385579,
+      "Threshold std": 0.0038376651,
+      "Recall@k 평균": 0.45,
+      "Recall@k 표준편차": 0.0333333333,
+      "Precision@k 평균": 0.1719745223,
+      "Lift 평균": 14.9904458599
+    },
+    {
+      "검사 비율": 0.05,
+      "검사 수": 262,
+      "Threshold mean": 0.3160168125,
+      "Threshold std": 0.0044130568,
+      "Recall@k 평균": 0.5333333333,
+      "Recall@k 표준편차": 0.0440958552,
+      "Precision@k 평균": 0.1221374046,
+      "Lift 평균": 10.6463104326
+    },
+    {
+      "검사 비율": 0.07,
+      "검사 수": 366,
+      "Threshold mean": 0.2494951227,
+      "Threshold std": 0.0065448635,
+      "Recall@k 평균": 0.6833333333,
+      "Recall@k 표준편차": 0.0288675135,
+      "Precision@k 평균": 0.1120218579,
+      "Lift 평균": 9.764571949
+    },
+    {
+      "검사 비율": 0.1,
+      "검사 수": 523,
+      "Threshold mean": 0.1627124142,
+      "Threshold std": 0.0003970502,
+      "Recall@k 평균": 0.7888888889,
+      "Recall@k 표준편차": 0.0096225045,
+      "Precision@k 평균": 0.0905035054,
+      "Lift 평균": 7.8888888889
+    },
+    {
+      "검사 비율": 0.15,
+      "검사 수": 784,
+      "Threshold mean": 0.0793557834,
+      "Threshold std": 0.0012651445,
+      "Recall@k 평균": 0.8611111111,
+      "Recall@k 표준편차": 0.0254587539,
+      "Precision@k 평균": 0.0659013605,
+      "Lift 평균": 5.7444019274
+    },
+    {
+      "검사 비율": 0.2,
+      "검사 수": 1046,
+      "Threshold mean": 0.0349149353,
+      "Threshold std": 0.0017341077,
+      "Recall@k 평균": 0.9388888889,
+      "Recall@k 표준편차": 0.0254587539,
+      "Precision@k 평균": 0.0538559592,
+      "Lift 평균": 4.6944444444
+    }
+  ],
+  "data_corrections": {
+    "average_screw_rpm": "100 초과 값은 10으로 나눔 (mm/s 기준, Average <= Max 위반 3021건 -> 0건)",
+    "back_pressure": "행별로 Average=min, Max=max로 재구성 (위반 5212건 -> 0건)",
+    "dropped_columns": [
+      "Clamp_Open_Position"
+    ],
+    "note": "02_EDA에서 적용한 규칙. 예측 서버는 dashboard/backend/app/corrections.py에 같은 규칙을 둠"
+  },
+  "excluded": {
+    "autoencoder_recon_error": "04_6 짝비교에서 운영 구간 이득이 없어 미적용",
+    "smote": "최종 모델은 class_weight=balanced 사용",
+    "pca": "04_3에서 AP 0.05~0.20으로 하락하여 기각",
+    "feature_selection": "04_4에서 AP 하락하여 기각"
+  },
+  "library_versions": {
+    "scikit-learn": "1.9.0"
+  }
+}
