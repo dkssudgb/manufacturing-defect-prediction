@@ -1,0 +1,82 @@
+[
+  {
+    "threshold": 0.6386,
+    "inspect_ratio": 0.01,
+    "inspection_count_per_day": 4.0,
+    "recall_at_k": 0.3222,
+    "recall_at_k_std": 0.0347,
+    "precision_at_k": 0.3718,
+    "lift": 32.41,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.4969,
+    "inspect_ratio": 0.02,
+    "inspection_count_per_day": 8.0,
+    "recall_at_k": 0.4056,
+    "recall_at_k_std": 0.0419,
+    "precision_at_k": 0.2317,
+    "lift": 20.2,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.4215,
+    "inspect_ratio": 0.03,
+    "inspection_count_per_day": 12.1,
+    "recall_at_k": 0.45,
+    "recall_at_k_std": 0.0333,
+    "precision_at_k": 0.172,
+    "lift": 14.99,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.316,
+    "inspect_ratio": 0.05,
+    "inspection_count_per_day": 20.1,
+    "recall_at_k": 0.5333,
+    "recall_at_k_std": 0.0441,
+    "precision_at_k": 0.1221,
+    "lift": 10.65,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.2495,
+    "inspect_ratio": 0.07,
+    "inspection_count_per_day": 28.1,
+    "recall_at_k": 0.6833,
+    "recall_at_k_std": 0.0289,
+    "precision_at_k": 0.112,
+    "lift": 9.76,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.1627,
+    "inspect_ratio": 0.1,
+    "inspection_count_per_day": 40.2,
+    "recall_at_k": 0.7889,
+    "recall_at_k_std": 0.0096,
+    "precision_at_k": 0.0905,
+    "lift": 7.89,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.0794,
+    "inspect_ratio": 0.15,
+    "inspection_count_per_day": 60.3,
+    "recall_at_k": 0.8611,
+    "recall_at_k_std": 0.0255,
+    "precision_at_k": 0.0659,
+    "lift": 5.74,
+    "daily_production_baseline": 402
+  },
+  {
+    "threshold": 0.0349,
+    "inspect_ratio": 0.2,
+    "inspection_count_per_day": 80.4,
+    "recall_at_k": 0.9389,
+    "recall_at_k_std": 0.0255,
+    "precision_at_k": 0.0539,
+    "lift": 4.69,
+    "daily_production_baseline": 402
+  }
+]
