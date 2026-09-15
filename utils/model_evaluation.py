@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
@@ -20,6 +21,82 @@ RESULT_COLUMNS = [
     "Defect F1 Score",
     "Average Precision",
 ]
+
+DEFAULT_INSPECT_RATIOS = (0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3)
+
+RECALL_AT_K_COLUMNS = [
+    "검사 비율",
+    "검사 수",
+    "Recall@k",
+    "Precision@k",
+    "Lift",
+    "불량 탐지 수",
+]
+
+
+def recall_at_k_table(
+    y_true: Any,
+    probabilities: Any,
+    *,
+    inspect_ratios: Sequence[float] = DEFAULT_INSPECT_RATIOS,
+    positive_label: Any = 1,
+    extra_columns: Mapping[str, Any] | None = None,
+) -> pd.DataFrame:
+    """Score a top-k% inspection policy from predicted probabilities.
+
+    Rows are sorted by descending probability and cut at each ratio in
+    ``inspect_ratios``, which is how the defect queue is meant to be used on
+    the shop floor: inspect a fixed volume, not everything above a threshold.
+
+    ``Recall@k`` is the share of all defects caught within that volume,
+    ``Precision@k`` the share of inspections that hit a defect, and ``Lift``
+    that precision divided by the base defect rate, i.e. how many times better
+    than inspecting the same number of rows at random.
+
+    ``extra_columns`` is prepended to every row unchanged, so identifying
+    columns such as ``{"Model": name}`` can be carried into the table.
+    """
+    labels = np.asarray(y_true)
+    scores = np.asarray(probabilities)
+    if labels.shape[0] != scores.shape[0]:
+        raise ValueError(
+            f"y_true has {labels.shape[0]} rows but probabilities has {scores.shape[0]}."
+        )
+    if np.isnan(scores).any():
+        raise ValueError("probabilities contains NaN; every row needs a prediction.")
+
+    is_defect = (labels == positive_label).astype(int)
+    n_total = len(is_defect)
+    n_defect = int(is_defect.sum())
+    if n_defect == 0:
+        raise ValueError(f"y_true contains no positive_label={positive_label!r} rows.")
+    base_rate = n_defect / n_total
+
+    # 확률 내림차순으로 세운 뒤 상위 k%까지의 누적 불량 수를 사용
+    defect_cumsum = np.cumsum(is_defect[np.argsort(-scores, kind="stable")])
+
+    rows = []
+    for ratio in inspect_ratios:
+        n_inspect = max(1, round(n_total * ratio))
+        if n_inspect > n_total:
+            raise ValueError(f"inspect_ratios contains {ratio!r}, which exceeds the row count.")
+        detected = int(defect_cumsum[n_inspect - 1])
+        precision_at_k = detected / n_inspect
+
+        rows.append(
+            {
+                **dict(extra_columns or {}),
+                "검사 비율": ratio,
+                "검사 수": n_inspect,
+                "Recall@k": detected / n_defect,
+                "Precision@k": precision_at_k,
+                "Lift": precision_at_k / base_rate,
+                "불량 탐지 수": f"{detected}/{n_defect}",
+            }
+        )
+
+    columns = list(dict(extra_columns or {})) + RECALL_AT_K_COLUMNS
+    return pd.DataFrame(rows, columns=columns)
 
 
 def evaluate_models(
