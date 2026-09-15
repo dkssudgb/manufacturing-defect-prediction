@@ -182,3 +182,24 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# 학습된 모델 파일
+models/
+*.pkl
+*.joblib
+
+# markdown
+ANALYSIS_FLOW.md
+ANALYSIS_RESULTS.md
+REPORT.md
+
+# dashboard
+plan.md
+change.md
+scenario.md
+
+# ipynb
+guide.ipynb
+test.ipynb
+260811_EDA_v2.ipynb
+260813_Modeling_SMOTE.ipynb
