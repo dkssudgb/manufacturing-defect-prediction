@@ -30,7 +30,7 @@ export function InspectionForm({ record, worker, onSubmit, onCancel, submitting 
       <div className="inspection-target">
         <div className="inspection-product"><span>검사 대상 부품</span><strong>{record.part_name}</strong><small>{record.part} · {record.part_no || "제품번호 없음"}</small></div>
         <div><span>사출기</span><strong>{record.equip_cd || "-"}</strong><small>{record.equip_name || "설비명 없음"}</small></div>
-        <div><span>불량확률</span><strong className="risk-text">{Math.round(record.defect_probability * 100)}%</strong><small>기준 {Math.round(record.threshold * 100)}%</small></div>
+        <div><span>불량확률</span><strong className="risk-text">{(record.defect_probability * 100).toFixed(1)}%</strong><small>기준 {(record.threshold * 100).toFixed(1)}%</small></div>
       </div>
 
       <fieldset>

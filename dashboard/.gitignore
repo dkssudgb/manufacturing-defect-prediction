@@ -6,4 +6,7 @@ backend/**/__pycache__/
 backend/.pytest_cache/
 .env
 *.pyc
-
+backend/data/retrain_labels.csv
+backend/tests/test_retrain_labels.csv
+backend/models/retrained/
+backend/models/retrained_test/

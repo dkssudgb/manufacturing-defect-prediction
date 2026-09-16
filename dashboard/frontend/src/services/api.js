@@ -32,6 +32,14 @@ export const api = {
   inspectionQueue: (limit = 500, equipCd = "all") => request(`/inspection-queue?limit=${limit}${equipCd === "all" ? "" : `&equip_cd=${encodeURIComponent(equipCd)}`}`),
   inspections: (limit = 60) => request(`/inspections?limit=${limit}`),
   thresholdHistory: () => request("/threshold/history"),
+  modelRegistry: (limit = 50) => request(`/model/registry?limit=${limit}`),
+  retrainStatus: () => request("/model/retrain/status"),
+  walkforward: () => request("/model/walkforward"),
+  retrain: (actor, reason) =>
+    request("/model/retrain", {
+      method: "POST",
+      body: JSON.stringify({ actor, reason }),
+    }),
   next: (count = 1) => request("/demo/next", { method: "POST", body: JSON.stringify({ count }) }),
   reset: () => request("/demo/reset", { method: "POST" }),
   changeThreshold: (threshold, actor, reason) =>

@@ -22,7 +22,7 @@ export function Modal({ open, onClose, title, eyebrow, children, size = "medium"
             {eyebrow && <p className="eyebrow">{eyebrow}</p>}
             <h2 id="modal-title">{title}</h2>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="창 닫기"><X size={20} /></button>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="창 닫기"><X size={18} /></button>
         </header>
         <div className="modal-body">{children}</div>
       </section>
