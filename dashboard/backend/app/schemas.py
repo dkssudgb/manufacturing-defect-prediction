@@ -80,3 +80,8 @@ class InspectionComplete(BaseModel):
 class DemoAdvance(BaseModel):
     count: int = Field(default=1, ge=1, le=20)
 
+
+
+class RetrainRequest(BaseModel):
+    actor: str = Field(min_length=1, max_length=80)
+    reason: str = Field(min_length=2, max_length=500)

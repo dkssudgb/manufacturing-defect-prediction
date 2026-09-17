@@ -254,7 +254,7 @@ SMOTE는 학습 데이터에만 적용하고 실시간 예측에는 적용하지
 | 센서 결측 | 6개 변수 동시 0이면 `predictable: false`, `prediction: 데이터 결측`으로 반환 |
 | 미지원 품명 | `Part` 범주 4종 검증 후 `모델 지원 대상 아님` |
 | 검증 성능표 | `models/threshold_metrics.json` — 검사 물량별 Recall@k · Lift |
-| 시연 데이터 | `data/realtime_sample.csv` 150건을 2020-10-18 ~ 10-22 구간에서 재생성 (결측 0건) |
+| 시연 데이터 | `data/realtime_sample.csv` 1,000건을 2020-10-18 ~ 10-22 구간에서 재생성 (결측 0건) |
 
 테스트 11건이 통과한다(`pytest tests/`). 보정·결측·미지원 품명 동작은 각각 전용 테스트로 확인한다.
 
@@ -688,7 +688,7 @@ unlabeled 전 구간을 대상으로 결측률, 지원 품목 비율, 알람 발
 - [x] 최종 `feature_cols`와 전처리 객체 저장 — `models/final_feature_columns.pkl`, `models/final_model_meta.json`
 - [x] 최종 Threshold와 작업자 허용 범위 확정 — 기본 0.163, 허용 0.079 ~ 0.639 (`backend/app/settings.py`)
 - [x] Threshold별 검증 성능표 저장 — `data/05_Operating_Point_by_ratio.csv`
-- [x] CN7과 RG3 시연 데이터 준비 — `backend/data/realtime_sample.csv` 150건
+- [x] CN7과 RG3 시연 데이터 준비 — `backend/data/realtime_sample.csv` 1,000건
 
 ### 9월 16일~22일: FastAPI 구현 — 완료 (2026-09-09 ~ 09-10, 일정보다 앞섬)
 
@@ -723,7 +723,7 @@ unlabeled 전 구간을 대상으로 결측률, 지원 품목 비율, 알람 발
 
 ### 10월 13일~15일: 최종 점검
 
-- [ ] 테스트 계정과 시연 데이터 정리 — 시연 데이터 150건은 확정, 계정은 인증 구현 후
+- [ ] 테스트 계정과 시연 데이터 정리 — 시연 데이터 1,000건은 확정, 계정은 인증 구현 후
 - [ ] 오류 및 예외 상황 점검 — API 테스트 17건은 통과, 화면 예외는 미점검
 - [x] README와 발표 시나리오 작성 — `README.md`, `scenario.md`
 - [ ] 포트폴리오용 화면 정리

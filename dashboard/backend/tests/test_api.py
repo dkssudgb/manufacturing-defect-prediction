@@ -57,12 +57,12 @@ def test_health_and_model_info(client):
 def test_demo_sample_has_requested_composition():
     records = get_demo_data().records
     parts = [f"{item['PART_NAME'][:3]}{item['PART_NAME'][-2:]}" for item in records]
-    assert len(records) == 150
-    assert parts.count("CN7LH") == 37
-    assert parts.count("CN7RH") == 36
-    assert parts.count("RG3LH") == 36
-    assert parts.count("RG3RH") == 36
-    assert sum(part not in {"CN7LH", "CN7RH", "RG3LH", "RG3RH"} for part in parts) == 5
+    assert len(records) == 1000
+    assert parts.count("CN7LH") == 245
+    assert parts.count("CN7RH") == 245
+    assert parts.count("RG3LH") == 245
+    assert parts.count("RG3RH") == 245
+    assert sum(part not in {"CN7LH", "CN7RH", "RG3LH", "RG3RH"} for part in parts) == 20
 
 
 def test_demo_predictions_include_real_model_result(client):
@@ -124,7 +124,11 @@ def test_equipment_summary_and_filter_are_consistent(client):
         filtered_queue = client.get(
             f"/inspection-queue?limit=500&equip_cd={equip_cd}"
         ).json()
-        assert filtered_summary["received"] == len(filtered_predictions)
+        # 목록은 limit 500에서 잘리므로 총 건수는 검색 total로 확인한다
+        searched = client.get(
+            f"/predictions/search?prediction_state=all&limit=1&offset=0&equip_cd={equip_cd}"
+        ).json()
+        assert filtered_summary["received"] == searched["total"]
         assert all(item["equip_cd"] == equip_cd for item in filtered_predictions)
         assert all(item["equip_cd"] == equip_cd for item in filtered_queue)
 
@@ -137,12 +141,17 @@ def test_prediction_events_accumulate_and_paginate(client):
     같은 제품이 다시 들어오지 않는다.
     """
     client.post("/demo/reset")
-    unique_before = len(client.get("/predictions?limit=500").json())
+    # /predictions는 limit 상한이 500이라 시드 건수가 그 이상이면 잘린다.
+    # 전체 건수는 검색의 total로 센다.
+    def unique_total():
+        return client.get("/predictions/search?prediction_state=all&limit=1&offset=0").json()["total"]
+
+    unique_before = unique_total()
     events_before = client.get("/prediction-events?limit=10&offset=0").json()["total"]
 
     client.post("/demo/next", json={"count": 20})
 
-    unique_after = len(client.get("/predictions?limit=500").json())
+    unique_after = unique_total()
     events_after = client.get("/prediction-events?limit=10&offset=0").json()["total"]
     assert unique_after == unique_before + 20
     assert events_after == events_before + 20
@@ -389,3 +398,307 @@ def test_equipment_summary_marks_supported_machine(client):
     assert summary["S06"]["model_supported"] is False
     assert summary["S06"]["trained"] is False
     assert summary["S06"]["received"] == 0
+
+
+# ---- 재학습 -------------------------------------------------------------
+
+
+def advance_until_queue(client, needed: int, max_batches: int = 40) -> list[dict]:
+    """검사 대기열이 needed건 이상이 될 때까지 재생한다.
+
+    advance_until_alarm은 알람이 하나라도 나오면 멈추므로 대기열이 1~2건뿐이다.
+    재학습 테스트는 여러 건의 라벨이 필요하다.
+    """
+    for _ in range(max_batches):
+        queue = client.get(f"/inspection-queue?limit=500").json()
+        if len(queue) >= needed:
+            return queue
+        assert client.post("/demo/next", json={"count": 20}).status_code == 200
+    raise AssertionError(f"재생을 마쳤으나 검사 대기가 {needed}건에 못 미칩니다.")
+
+
+def complete_inspections(client, count: int) -> list[dict]:
+    """검사 대기열에서 count건을 시작하고 완료한다. 3건마다 한 번 불량으로 기록한다."""
+    queue = advance_until_queue(client, count)
+    results = []
+    for index, record in enumerate(queue[:count]):
+        client.post(
+            f"/inspections/{record['record_id']}/start",
+            json={"worker_id": "worker-01", "worker_name": "김현장"},
+        )
+        defect = index % 3 == 0
+        response = client.post(
+            f"/inspections/{record['record_id']}/complete",
+            json={
+                "worker_id": "worker-01",
+                "actual_label": "불량" if defect else "정상",
+                "defect_type": "미성형" if defect else None,
+                "checked_items": ["금형"],
+                "action": "확인 후 조치 기록",
+                "additional_inspection": False,
+            },
+        )
+        assert response.status_code == 200
+        results.append(response.json())
+    return results
+
+
+def test_model_registry_seeds_initial_model(client):
+    client.post("/demo/reset")
+    registry = client.get("/model/registry").json()
+    assert len(registry) == 1
+    assert registry[0]["version"] == "v1.1.0"
+    assert registry[0]["source"] == "초기 배포"
+    assert registry[0]["active"] is True
+    assert registry[0]["train_records"] == 5230
+
+
+def test_retrain_without_labels_is_rejected(client):
+    client.post("/demo/reset")
+    response = client.post(
+        "/model/retrain", json={"actor": "박품질", "reason": "표본 없이 시도"}
+    )
+    assert response.status_code == 409
+    assert "검사 결과가 없습니다" in response.json()["detail"]
+
+
+def test_retrain_uses_inspection_labels_and_swaps_model(client):
+    from app.settings import AUTO_RETRAIN_MIN_LABELS
+
+    client.post("/demo/reset")
+    labels = AUTO_RETRAIN_MIN_LABELS - 1
+    complete_inspections(client, labels)
+
+    before = client.get("/model/retrain/status").json()
+    assert before["pending_inspections"] == labels
+    assert before["recommended"] is False
+
+    response = client.post(
+        "/model/retrain", json={"actor": "이분석", "reason": "검사 결과 반영"}
+    )
+    assert response.status_code == 200
+    entry = response.json()
+    assert entry["version"] == "v1.2.0"
+    assert entry["trigger"] == "수동"
+    # 기준 5,230건에 검사로 확보한 라벨이 더해진다
+    assert entry["train_records"] == 5230 + labels
+    assert entry["added_records"] == labels
+    assert entry["skipped"] == []
+
+    # 서버 재시작 없이 서빙 모델이 바뀐다
+    assert client.get("/health").json()["model_version"] == "v1.2.0"
+    info = client.get("/model/info").json()
+    assert info["model_version"] == "v1.2.0"
+    assert info["validation_stale"] is True
+
+    client.post("/demo/next", json={"count": 1})
+    latest = client.get("/predictions?limit=1").json()
+    assert latest[0]["model_version"] == "v1.2.0"
+
+
+def test_auto_retrain_fires_at_threshold(client):
+    """기준 건수에 도달하는 그 검사에서 발동해야 한다.
+
+    기준은 settings.AUTO_RETRAIN_MIN_LABELS이며 07_2의 반영 지연 구간에서
+    나온 값이다. 숫자를 하드코딩하지 않고 상수를 따라간다.
+    """
+    from app.settings import AUTO_RETRAIN_MIN_LABELS as threshold
+
+    client.post("/demo/reset")
+    results = complete_inspections(client, threshold)
+
+    # 기준 직전까지는 발동하지 않는다
+    assert all(item.get("auto_retrained") is None for item in results[:-1])
+    auto = results[-1]["auto_retrained"]
+    assert auto is not None
+    assert auto["trigger"] == "자동"
+    assert auto["added_records"] == threshold
+
+    status = client.get("/model/retrain/status").json()
+    assert status["active_source"] == "재학습"
+    assert status["pending_inspections"] == 0
+
+
+def test_reset_restores_initial_model(client):
+    from app.settings import AUTO_RETRAIN_MIN_LABELS
+
+    client.post("/demo/reset")
+    complete_inspections(client, AUTO_RETRAIN_MIN_LABELS - 1)
+    client.post("/model/retrain", json={"actor": "이분석", "reason": "초기화 점검"})
+    assert client.get("/health").json()["model_version"] == "v1.2.0"
+
+    client.post("/demo/reset")
+    registry = client.get("/model/registry").json()
+    assert [row["version"] for row in registry] == ["v1.1.0"]
+    assert client.get("/health").json()["model_version"] == "v1.1.0"
+
+
+def test_walkforward_reference_matches_report(client):
+    payload = client.get("/model/walkforward").json()
+    rows = {row["cadence"]: row for row in payload["rows"]}
+    # REPORT.md 4.13의 세 숫자
+    assert rows["50샷"]["recall_at_10"] == pytest.approx(0.628, abs=1e-3)
+    assert rows["50샷"]["lift_at_10"] == pytest.approx(6.3, abs=0.05)
+    assert rows["100샷"]["lift_at_10"] == pytest.approx(4.9, abs=0.05)
+    assert rows["생산일"]["lift_at_10"] == pytest.approx(2.1, abs=0.05)
+
+
+def test_validation_numbers_stay_tied_to_initial_model(client):
+    """재학습해도 검증 수치는 v1.1.0 것이며, 그 사실이 플래그로 드러나야 한다.
+
+    AP와 Threshold 성능표는 초기 모델을 교차검증해 얻은 값이라 재학습으로
+    자동 갱신될 수 없다. 화면이 새 버전 옆에 옛 수치를 그대로 보여주면
+    오해를 만들기 때문에 validation_stale로 구분한다.
+    """
+    from app.settings import AUTO_RETRAIN_MIN_LABELS
+
+    client.post("/demo/reset")
+    base = client.get("/model/info").json()
+    assert base["validation_stale"] is False
+    assert base["train_records"] == 5230
+
+    # 자동 발동에 걸리지 않도록 기준보다 적게 검사한다
+    labels = AUTO_RETRAIN_MIN_LABELS - 1
+    complete_inspections(client, labels)
+    client.post("/model/retrain", json={"actor": "이분석", "reason": "검증 표시 점검"})
+    after = client.get("/model/info").json()
+
+    # 서빙 모델을 따라 바뀌는 값
+    assert after["model_version"] == "v1.2.0"
+    assert after["train_records"] == 5230 + labels
+    assert after["validation_stale"] is True
+
+    # 초기 모델에 묶여 그대로인 값
+    assert after["validation"]["records"] == base["validation"]["records"]
+    assert after["validation"]["defects"] == base["validation"]["defects"]
+    assert after["validation"]["average_precision_mean"] == base["validation"]["average_precision_mean"]
+    assert after["threshold_metrics"] == base["threshold_metrics"]
+    assert after["default_threshold"] == base["default_threshold"]
+
+
+def test_retrain_artifacts_are_isolated_from_dev_instance():
+    """테스트는 개발 인스턴스의 재학습 산출물 경로를 건드리면 안 된다."""
+    from app.settings import RETRAIN_LABELS_PATH, RETRAINED_MODEL_DIR
+
+    assert "test" in RETRAIN_LABELS_PATH.name
+    assert RETRAINED_MODEL_DIR.name == "retrained_test"
+
+
+def test_reset_seeds_enough_records_for_the_retrain_demo(client):
+    """초기화 직후 바로 재학습 시연을 시작할 수 있어야 한다.
+
+    위험 제품은 표본에 고르게 있지 않다. 첫 위험이 164번째에야 나오고
+    301~500번째는 200건 내리 0건이다. 시드가 모자라면 검사 대기열이 비어
+    자동 재학습 기준(10건)을 채울 수 없다.
+    """
+    from app.settings import AUTO_RETRAIN_MIN_LABELS, DEMO_SEED_RECORDS
+
+    reset = client.post("/demo/reset").json()
+    assert reset["played"] == DEMO_SEED_RECORDS
+
+    summary = client.get("/dashboard/summary").json()
+    assert summary["received"] == DEMO_SEED_RECORDS
+    # 자동 재학습 기준을 채우고도 남을 만큼 대기열이 있어야 한다
+    assert summary["waiting"] >= AUTO_RETRAIN_MIN_LABELS
+
+    # 추이 차트가 그리는 최근 60건에 threshold를 넘는 점이 있어야 한다.
+    # 시드가 위험 0건 구간(301~500번째)에 걸리면 차트가 바닥에 붙은 평평한
+    # 선으로 보여 첫 화면이 비어 보인다.
+    threshold = summary["current_threshold"]
+    recent = client.get("/prediction-events?limit=60&offset=0").json()["items"]
+    above = [
+        item for item in recent
+        if item["defect_probability"] is not None and item["defect_probability"] >= threshold
+    ]
+    assert above, "시드 지점의 최근 60건에 위험 판정이 하나도 없어 차트가 비어 보인다"
+
+
+def test_inspection_queue_exposes_inspector(client):
+    """검사 중인 제품은 담당자 이름이 함께 나와야 한다.
+
+    worker_name은 inspections에만 있어 predictions 단독 조회로는 알 수 없다.
+    화면에 쓰는 조회는 모두 조인해서 inspector를 내려준다.
+    """
+    client.post("/demo/reset")
+    queue = advance_until_queue(client, 1)
+    record_id = queue[0]["record_id"]
+    client.post(
+        f"/inspections/{record_id}/start",
+        json={"worker_id": "manager-01", "worker_name": "박품질"},
+    )
+
+    in_progress = next(
+        item for item in client.get("/inspection-queue?limit=500").json()
+        if item["record_id"] == record_id
+    )
+    assert in_progress["inspection_status"] == "검사 중"
+    assert in_progress["inspector"] == "박품질"
+    assert in_progress["inspection_started_at"]
+
+    assert client.get(f"/predictions/{record_id}").json()["inspector"] == "박품질"
+
+    searched = client.get(
+        f"/predictions/search?prediction_state=all&limit=5&offset=0&keyword={record_id}"
+    ).json()
+    assert searched["items"][0]["inspector"] == "박품질"
+
+    # 검사가 시작되지 않은 제품은 담당자가 비어 있다
+    untouched = next(
+        item for item in client.get("/inspection-queue?limit=500").json()
+        if item["record_id"] != record_id
+    )
+    assert untouched["inspector"] is None
+
+
+def test_walkforward_rows_carry_performance_bands(client):
+    """특정 주기 하나가 아니라 성능 구간으로 읽혀야 한다.
+
+    ANALYSIS_RESULTS.md 7-1: 구간 안의 차이는 노이즈이며 의미 있는 구분은
+    25분 이내 / 1시간~35시간 / 하루 세 가지다.
+    """
+    payload = client.get("/model/walkforward").json()
+    assert payload["best_band"] == "25분 이내"
+    bands = {row["cadence"]: row["band"] for row in payload["rows"]}
+    assert bands["10샷"] == bands["25샷"] == bands["50샷"] == "25분 이내"
+    assert bands["100샷"] == bands["500샷"] == "1시간 ~ 35시간"
+    assert bands["생산일"] == "하루"
+
+
+def test_concurrent_replay_does_not_rewind_the_cursor(client):
+    """재생 중에 초기화가 들어와도 커서가 과거로 되감기지 않아야 한다.
+
+    예전에는 advance가 진입 시점의 sequence를 들고 있다가 예측을 마친 뒤
+    덮어써서, 초기화 직후 이미 저장된 제품을 다시 재생하는 상태가 됐다.
+    그 상태에서는 재생을 눌러도 수신 건수가 늘지 않는다.
+    """
+    from app.settings import DEMO_SEED_RECORDS
+
+    client.post("/demo/reset")
+    before = client.get("/dashboard/summary").json()
+    assert before["received"] == DEMO_SEED_RECORDS
+    assert before["demo_cursor"] == DEMO_SEED_RECORDS
+
+    client.post("/demo/next", json={"count": 5})
+    after = client.get("/dashboard/summary").json()
+
+    # 재생은 항상 새 제품을 가져와야 한다
+    assert after["demo_cursor"] == DEMO_SEED_RECORDS + 5
+    assert after["received"] == before["received"] + 5
+
+
+def test_reserve_demo_sequence_hands_out_disjoint_ranges():
+    """동시에 예약해도 구간이 겹치지 않아야 한다."""
+    from app.repository import repository
+
+    repository.set_state("demo_sequence", 0)
+    first_start, first_count = repository.reserve_demo_sequence(10, 100)
+    second_start, second_count = repository.reserve_demo_sequence(10, 100)
+    assert (first_start, first_count) == (0, 10)
+    assert (second_start, second_count) == (10, 10)
+
+    # 표본 끝을 넘겨 달라고 해도 남은 만큼만 준다
+    repository.set_state("demo_sequence", 95)
+    start, count = repository.reserve_demo_sequence(10, 100)
+    assert (start, count) == (95, 5)
+    start, count = repository.reserve_demo_sequence(10, 100)
+    assert count == 0

@@ -1,7 +1,7 @@
-"""Create a 150-record, model-focused replay sample from the original data.
+"""Create a 1,000-record, model-focused replay sample from the original data.
 
-The sample contains 145 model-supported records balanced across the four
-trained Part categories and five unsupported records. Rows are selected across
+The sample contains 980 model-supported records balanced across the four
+trained Part categories and 20 unsupported records. Rows are selected across
 the source timeline without using prediction scores, then replayed in timestamp
 order. At least one same-timestamp LH/RH pair per product family is retained
 when the source contains one.
@@ -33,8 +33,10 @@ SENSOR_MISSING_COLUMNS = (
     "Mold_Temperature_3",
     "Mold_Temperature_4",
 )
-TARGET_COUNTS = {"CN7LH": 37, "CN7RH": 36, "RG3LH": 36, "RG3RH": 36}
-UNSUPPORTED_COUNT = 5
+# 시연 구간에서 균형을 맞춰 뽑을 수 있는 한계는 품명당 약 3,250건이다.
+# 재생 길이(1초/건)를 고려해 품명당 245건씩만 사용한다.
+TARGET_COUNTS = {"CN7LH": 245, "CN7RH": 245, "RG3LH": 245, "RG3RH": 245}
+UNSUPPORTED_COUNT = 20
 
 
 def evenly_spaced(frame: pd.DataFrame, count: int) -> pd.DataFrame:
