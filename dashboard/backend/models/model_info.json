@@ -27,14 +27,69 @@
     "note": "utils/preprocessing.py의 apply_data_corrections와 동일 규칙. 예측 서버도 같은 함수를 사용해야 함"
   },
   "validation": {
-    "method": "전체 5230건 5-fold x 3반복 교차검증 (같은 기간 교차검증 기준)",
+    "method": "5-fold × 3반복 교차검증",
     "records": 5230,
     "defects": 60,
     "average_precision_mean": 0.3931,
     "average_precision_std": 0.1107,
-    "warning": "불량 60건, 불량 에피소드 6개. 생산일 단위로 분할하면 AP가 0.02 수준으로 떨어진다(ANALYSIS_RESULTS.md 11절). 새로운 기간에 대한 성능은 표본검사로 확인해야 한다.",
+    "warning": "같은 기간 교차검증이라 최상의 조건. 시간순으로 재학습하며 재면 훨씬 낮아짐",
     "daily_production_records": 402,
     "daily_defect_expectation": 4.62,
-    "daily_basis_note": "하루 기준 건수는 라벨 데이터 5,230건 / 생산일 13일 = 하루 평균 402건을 기준으로 환산한 값이다. 시연 표본(150건)이나 재생 진행 건수와는 다른 기준이다."
-  }
+    "daily_basis_note": "라벨 데이터 5,230건 ÷ 생산일 13일 = 402건. 시연 재생 건수와는 다른 기준",
+    "defect_episodes": 6
+  },
+  "pipeline_note": "저장된 모델 파일 안의 sklearn Pipeline 단계. 서버가 실제로 거치는 과정은 위의 추론 경로 참고",
+  "inference_path": [
+    {
+      "label": "입력 정규화",
+      "detail": "결측 표기와 numpy 타입을 파이썬 값으로 정리"
+    },
+    {
+      "label": "제품 접두어 확인",
+      "detail": "PART_NAME이 CN7 또는 RG3로 시작하는지 확인",
+      "gate": "모델 지원 대상 아님"
+    },
+    {
+      "label": "Part 범주 검증",
+      "detail": "앞 3글자 + 뒤 2글자가 학습된 4종(CN7LH·CN7RH·RG3LH·RG3RH)에 있는지 확인. 더미가 모두 0이 되면 기준 범주와 같은 입력이 되어 조용히 틀린 예측이 나옴",
+      "gate": "모델 입력 범주 미지원"
+    },
+    {
+      "label": "설비 확인",
+      "detail": "학습 설비는 S14(650톤-우진2호기) 한 대뿐. 도시바(S06)는 설비 외삽이라 예측하지 않음",
+      "gate": "모델 지원 대상 아님"
+    },
+    {
+      "label": "공정 변수 검사",
+      "detail": "학습에 쓰는 23개 수치 변수의 존재와 숫자 형식 확인. 여기서만 예외를 던지며, 재생 경로가 이를 받아 예측 불가로 기록",
+      "gate": "예측 불가 (입력 오류)"
+    },
+    {
+      "label": "센서 결측 판정",
+      "detail": "6개 변수가 함께 0이면 수집 채널 단절. 0은 물리적으로 불가능한 값이라 대체하지 않고 결측으로 표시",
+      "gate": "데이터 결측"
+    },
+    {
+      "label": "기록 오류 보정",
+      "detail": "Average_Screw_RPM이 100을 넘으면 10으로 나누고, Average > Max인 Back Pressure 쌍을 재구성. 학습 데이터와 같은 규칙"
+    },
+    {
+      "label": "학습 입력 구성",
+      "detail": "Part 더미를 만들어 학습 당시의 26개 컬럼 순서로 정렬"
+    },
+    {
+      "label": "StandardScaler",
+      "detail": "학습 시 적합한 스케일러를 그대로 적용",
+      "model": true
+    },
+    {
+      "label": "RandomForestClassifier",
+      "detail": "300트리, max_depth 20, class_weight=balanced",
+      "model": true
+    },
+    {
+      "label": "Threshold 판정",
+      "detail": "확률이 현재 기준 이상이면 불량 위험으로 판정하고 검사 대기열에 등록"
+    }
+  ]
 }
