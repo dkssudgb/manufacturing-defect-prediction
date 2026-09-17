@@ -189,7 +189,18 @@ def prepare_record(
     return skeleton, {column: row[column] for column in feature_columns}
 
 
-def apply_probability(skeleton: dict[str, Any], probability: float, threshold: float) -> dict[str, Any]:
+def apply_probability(
+    skeleton: dict[str, Any],
+    probability: float,
+    threshold: float,
+    model_features: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """확률을 채워 결과를 완성한다.
+
+    모델에 실제로 들어간 26개 피처를 함께 싣는다. 재학습은 이 값을 쓴다.
+    검사 결과만으로는 학습 행을 만들 수 없고, 예측 시점을 놓치면 보정까지
+    끝난 입력을 다시 복원할 방법이 없다.
+    """
     predicted_label = int(probability >= threshold)
     return {
         **skeleton,
@@ -197,6 +208,7 @@ def apply_probability(skeleton: dict[str, Any], probability: float, threshold: f
         "predicted_label": predicted_label,
         "prediction": "불량 위험" if predicted_label else "정상",
         "inspection_status": "검사 대기" if predicted_label else None,
+        "model_features": model_features or {},
     }
 
 
@@ -225,9 +237,12 @@ def predict_records(
     if pending:
         matrix = pd.DataFrame([row for _, row in pending], columns=feature_columns)
         probabilities = load_model().predict_proba(matrix)[:, 1]
-        for (index, _), probability in zip(pending, probabilities):
+        for (index, row), probability in zip(pending, probabilities):
             skeleton, _ = prepared[index]
-            prepared[index] = (apply_probability(skeleton, float(probability), threshold), None)
+            prepared[index] = (
+                apply_probability(skeleton, float(probability), threshold, row),
+                None,
+            )
 
     return [item if isinstance(item, ValueError) else item[0] for item in prepared]
 
@@ -242,5 +257,5 @@ def predict_record(
     feature_columns = load_feature_columns()
     matrix = pd.DataFrame([row], columns=feature_columns)
     probability = float(load_model().predict_proba(matrix)[0, 1])
-    return apply_probability(result, probability, threshold)
+    return apply_probability(result, probability, threshold, row)
 

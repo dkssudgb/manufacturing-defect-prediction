@@ -35,6 +35,7 @@ export const api = {
   modelRegistry: (limit = 50) => request(`/model/registry?limit=${limit}`),
   retrainStatus: () => request("/model/retrain/status"),
   walkforward: () => request("/model/walkforward"),
+  validate: () => request("/model/validate", { method: "POST" }),
   retrain: (actor, reason) =>
     request("/model/retrain", {
       method: "POST",

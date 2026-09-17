@@ -51,6 +51,7 @@ class Repository:
                     predictable INTEGER NOT NULL DEFAULT 1,
                     missing_features TEXT NOT NULL DEFAULT '[]',
                     input_warnings TEXT NOT NULL DEFAULT '[]',
+                    model_features TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
 
@@ -122,6 +123,9 @@ class Repository:
                     train_defects INTEGER NOT NULL,
                     added_records INTEGER NOT NULL DEFAULT 0,
                     added_defects INTEGER NOT NULL DEFAULT 0,
+                    validated_at TEXT,
+                    validation TEXT,
+                    threshold_metrics TEXT,
                     active INTEGER NOT NULL DEFAULT 0
                 );
                 """
@@ -192,20 +196,31 @@ class Repository:
     def _migrate(self) -> None:
         """기존 DB에 나중에 추가된 컬럼을 보강한다."""
         additions = {
-            "predictable": "INTEGER NOT NULL DEFAULT 1",
-            "missing_features": "TEXT NOT NULL DEFAULT '[]'",
-            "input_warnings": "TEXT NOT NULL DEFAULT '[]'",
+            "predictions": {
+                "predictable": "INTEGER NOT NULL DEFAULT 1",
+                "missing_features": "TEXT NOT NULL DEFAULT '[]'",
+                "input_warnings": "TEXT NOT NULL DEFAULT '[]'",
+                # 재학습이 쓰는 학습 피처. 예측 시점에 보정까지 끝난 값을 남긴다.
+                "model_features": "TEXT NOT NULL DEFAULT '{}'",
+            },
+            "model_registry": {
+                # 검증은 재학습과 별개로 실행하므로 결과를 모델 행에 붙인다.
+                "validated_at": "TEXT",
+                "validation": "TEXT",
+                "threshold_metrics": "TEXT",
+            },
         }
         with self.connection() as connection:
-            existing = {
-                row["name"]
-                for row in connection.execute("PRAGMA table_info(predictions)").fetchall()
-            }
-            for column, definition in additions.items():
-                if column not in existing:
-                    connection.execute(
-                        f"ALTER TABLE predictions ADD COLUMN {column} {definition}"
-                    )
+            for table, columns in additions.items():
+                existing = {
+                    row["name"]
+                    for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                for column, definition in columns.items():
+                    if column not in existing:
+                        connection.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                        )
 
             # 검색 조건으로 쓰는 컬럼에 인덱스를 만든다
             connection.executescript(
@@ -234,8 +249,9 @@ class Repository:
                         record_id, produced_at, part, part_no, part_name, equip_cd, equip_name,
                         supported, unsupported_reason, defect_probability, threshold,
                         predicted_label, prediction, inspection_status, model_version,
-                        process_values, predictable, missing_features, input_warnings, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        process_values, predictable, missing_features, input_warnings,
+                        model_features, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result["record_id"], result.get("produced_at"), result.get("part"),
@@ -248,6 +264,7 @@ class Repository:
                         int(result.get("predictable", True)),
                         json.dumps(result.get("missing_features", []), ensure_ascii=False),
                         json.dumps(result.get("input_warnings", []), ensure_ascii=False),
+                        json.dumps(result.get("model_features") or {}, ensure_ascii=False),
                         result["created_at"],
                     ),
                 )
@@ -576,6 +593,31 @@ class Repository:
             ).fetchone()
         return self._model_row(row)
 
+    def record_validation(
+        self, version: str, validation: dict[str, Any], threshold_metrics: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """검증 결과를 해당 모델 행에 붙인다. 버전은 바꾸지 않는다."""
+        with self._lock, self.connection() as connection:
+            connection.execute(
+                """
+                UPDATE model_registry
+                SET validated_at = ?, validation = ?, threshold_metrics = ?
+                WHERE version = ?
+                """,
+                (
+                    validation.get("measured_at") or now_iso(),
+                    json.dumps(validation, ensure_ascii=False),
+                    json.dumps(threshold_metrics, ensure_ascii=False),
+                    version,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM model_registry WHERE version = ?", (version,)
+            ).fetchone()
+        if not row:
+            raise KeyError(f"모델 버전을 찾을 수 없습니다: {version}")
+        return self._model_row(row)
+
     def model_registry(self, limit: int = 50) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(
@@ -587,7 +629,7 @@ class Repository:
         """검사 완료 건을 반환한다. moment 이후로 완료된 건만 고른다."""
         query = """
             SELECT i.record_id, i.actual_label, i.completed_at, i.evaluation,
-                   p.part, p.part_name, p.supported
+                   p.part, p.part_name, p.supported, p.model_features
             FROM inspections i JOIN predictions p ON p.record_id = i.record_id
             WHERE i.completed_at IS NOT NULL
         """
@@ -731,12 +773,18 @@ class Repository:
         result["process_values"] = json.loads(result["process_values"] or "{}")
         result["missing_features"] = json.loads(result.get("missing_features") or "[]")
         result["input_warnings"] = json.loads(result.get("input_warnings") or "[]")
+        # 학습 피처는 재학습만 쓴다. 화면 응답에 실으면 행마다 26개 실수가 붙는다.
+        result.pop("model_features", None)
         return result
 
     @staticmethod
     def _model_row(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result["active"] = bool(result["active"])
+        result["validated"] = bool(result.get("validated_at"))
+        for key in ("validation", "threshold_metrics"):
+            raw = result.get(key)
+            result[key] = json.loads(raw) if raw else None
         return result
 
     @staticmethod
