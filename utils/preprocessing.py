@@ -43,7 +43,7 @@ def correct_back_pressure(df: pd.DataFrame) -> pd.DataFrame:
     """Rebuild the back-pressure pair so the average never exceeds the maximum.
 
     `Average_Back_Pressure` is larger than `Max_Back_Pressure` in 99.7% of the
-    labeled rows and 81.6% of the unlabeled rows, which cannot happen for the
+    labeled rows and 41.8% of the CN7/RG3 unlabeled rows, which cannot happen for the
     average and maximum of one quantity. Which column holds which statistic is
     unknown, so only the weaker assumption is used: the pair is {average,
     maximum} in some order. Taking the row-wise minimum and maximum makes every
@@ -63,7 +63,7 @@ def drop_uninformative_columns(df: pd.DataFrame, columns: Sequence[str] = DROPPE
 
     `Clamp_Open_Position` takes three values in the labeled data (CN7 648.0,
     RG3 4.63, and 18 rows at 69.6) and is therefore determined by `Part`. In the
-    unlabeled data 80% of the values fall outside the trained range, so keeping
+    CN7/RG3 unlabeled data 76.3% of the values fall outside the trained range, so keeping
     it only feeds unseen values to the model.
     """
     return df.drop(columns=[c for c in columns if c in df.columns])
