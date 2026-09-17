@@ -51,6 +51,7 @@ class Repository:
                     predictable INTEGER NOT NULL DEFAULT 1,
                     missing_features TEXT NOT NULL DEFAULT '[]',
                     input_warnings TEXT NOT NULL DEFAULT '[]',
+                    model_features TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
 
@@ -107,6 +108,26 @@ class Repository:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS model_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    version TEXT NOT NULL UNIQUE,
+                    model_file TEXT NOT NULL,
+                    parent_version TEXT,
+                    source TEXT NOT NULL,
+                    trigger TEXT,
+                    reason TEXT,
+                    created_by TEXT,
+                    created_at TEXT NOT NULL,
+                    train_records INTEGER NOT NULL,
+                    train_defects INTEGER NOT NULL,
+                    added_records INTEGER NOT NULL DEFAULT 0,
+                    added_defects INTEGER NOT NULL DEFAULT 0,
+                    validated_at TEXT,
+                    validation TEXT,
+                    threshold_metrics TEXT,
+                    active INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
             connection.execute(
@@ -147,23 +168,59 @@ class Repository:
     def demo_sequence(self) -> int:
         return int(self.get_state("demo_sequence", "0"))
 
+    def reserve_demo_sequence(self, count: int, total: int) -> tuple[int, int]:
+        """재생할 구간을 원자적으로 예약한다. (시작 위치, 실제 건수)를 반환한다.
+
+        예전에는 advance가 진입 시점의 sequence를 읽어두고 예측을 끝낸 뒤에
+        sequence + count를 썼다. 재생이 도는 중에 초기화가 들어오면 초기화가
+        맞춰놓은 값을 뒤늦게 끝난 advance가 덮어써서, 이미 저장된 제품을 다시
+        재생하는 상태가 됐다. 읽기와 쓰기를 한 트랜잭션으로 묶어 막는다.
+        """
+        with self._lock, self.connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_state WHERE key = 'demo_sequence'"
+            ).fetchone()
+            sequence = int(row["value"]) if row else 0
+            count = max(0, min(count, total - sequence))
+            if count:
+                connection.execute(
+                    "UPDATE app_state SET value = ? WHERE key = 'demo_sequence'",
+                    (str(sequence + count),),
+                )
+                connection.execute(
+                    "UPDATE app_state SET value = ? WHERE key = 'demo_cursor'",
+                    (str(min(sequence + count, total)),),
+                )
+        return sequence, count
+
     def _migrate(self) -> None:
         """기존 DB에 나중에 추가된 컬럼을 보강한다."""
         additions = {
-            "predictable": "INTEGER NOT NULL DEFAULT 1",
-            "missing_features": "TEXT NOT NULL DEFAULT '[]'",
-            "input_warnings": "TEXT NOT NULL DEFAULT '[]'",
+            "predictions": {
+                "predictable": "INTEGER NOT NULL DEFAULT 1",
+                "missing_features": "TEXT NOT NULL DEFAULT '[]'",
+                "input_warnings": "TEXT NOT NULL DEFAULT '[]'",
+                # 재학습이 쓰는 학습 피처. 예측 시점에 보정까지 끝난 값을 남긴다.
+                "model_features": "TEXT NOT NULL DEFAULT '{}'",
+            },
+            "model_registry": {
+                # 검증은 재학습과 별개로 실행하므로 결과를 모델 행에 붙인다.
+                "validated_at": "TEXT",
+                "validation": "TEXT",
+                "threshold_metrics": "TEXT",
+            },
         }
         with self.connection() as connection:
-            existing = {
-                row["name"]
-                for row in connection.execute("PRAGMA table_info(predictions)").fetchall()
-            }
-            for column, definition in additions.items():
-                if column not in existing:
-                    connection.execute(
-                        f"ALTER TABLE predictions ADD COLUMN {column} {definition}"
-                    )
+            for table, columns in additions.items():
+                existing = {
+                    row["name"]
+                    for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                for column, definition in columns.items():
+                    if column not in existing:
+                        connection.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                        )
 
             # 검색 조건으로 쓰는 컬럼에 인덱스를 만든다
             connection.executescript(
@@ -192,8 +249,9 @@ class Repository:
                         record_id, produced_at, part, part_no, part_name, equip_cd, equip_name,
                         supported, unsupported_reason, defect_probability, threshold,
                         predicted_label, prediction, inspection_status, model_version,
-                        process_values, predictable, missing_features, input_warnings, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        process_values, predictable, missing_features, input_warnings,
+                        model_features, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result["record_id"], result.get("produced_at"), result.get("part"),
@@ -206,6 +264,7 @@ class Repository:
                         int(result.get("predictable", True)),
                         json.dumps(result.get("missing_features", []), ensure_ascii=False),
                         json.dumps(result.get("input_warnings", []), ensure_ascii=False),
+                        json.dumps(result.get("model_features") or {}, ensure_ascii=False),
                         result["created_at"],
                     ),
                 )
@@ -271,14 +330,21 @@ class Repository:
         with self.connection() as connection:
             if equip_cd:
                 rows = connection.execute(
-                    "SELECT * FROM predictions WHERE equip_cd = ? ORDER BY rowid DESC LIMIT ?",
+                    f"{self.PREDICTION_SELECT} WHERE p.equip_cd = ? ORDER BY p.rowid DESC LIMIT ?",
                     (equip_cd, limit),
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    "SELECT * FROM predictions ORDER BY rowid DESC LIMIT ?", (limit,)
+                    f"{self.PREDICTION_SELECT} ORDER BY p.rowid DESC LIMIT ?", (limit,)
                 ).fetchall()
         return [self._prediction_row(row) for row in rows]
+
+    # 검사 담당자는 inspections에만 있으므로 화면에 쓰는 조회는 모두 조인해서
+    # inspector(담당자 이름)와 inspection_started_at을 함께 내려준다.
+    PREDICTION_SELECT = """
+        SELECT p.*, i.worker_name AS inspector, i.started_at AS inspection_started_at
+        FROM predictions p LEFT JOIN inspections i ON i.record_id = p.record_id
+    """
 
     # 판정 상태 묶음: 화면에서 고르는 값 -> predictions.prediction 값 목록
     PREDICTION_STATES = {
@@ -309,34 +375,36 @@ class Repository:
         if keyword:
             like = f"%{keyword.strip()}%"
             conditions.append(
-                "(record_id LIKE ? OR part_name LIKE ? OR IFNULL(part_no, '') LIKE ? OR IFNULL(part, '') LIKE ?)"
+                "(p.record_id LIKE ? OR p.part_name LIKE ? OR IFNULL(p.part_no, '') LIKE ? OR IFNULL(p.part, '') LIKE ?)"
             )
             params.extend([like, like, like, like])
 
         if prediction_state and prediction_state != "all":
             values = self.PREDICTION_STATES.get(prediction_state)
             if values:
-                conditions.append(f"prediction IN ({', '.join('?' for _ in values)})")
+                conditions.append(f"p.prediction IN ({', '.join('?' for _ in values)})")
                 params.extend(values)
 
         if date_from:
-            conditions.append("produced_at >= ?")
+            conditions.append("p.produced_at >= ?")
             params.append(f"{date_from} 00:00:00")
         if date_to:
-            conditions.append("produced_at <= ?")
+            conditions.append("p.produced_at <= ?")
             params.append(f"{date_to} 23:59:59")
         if equip_cd and equip_cd != "all":
-            conditions.append("equip_cd = ?")
+            conditions.append("p.equip_cd = ?")
             params.append(equip_cd)
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         with self.connection() as connection:
+            # inspections.record_id가 UNIQUE라 LEFT JOIN이 행 수를 늘리지 않는다.
+            join = "FROM predictions p LEFT JOIN inspections i ON i.record_id = p.record_id"
             total = connection.execute(
-                f"SELECT COUNT(*) AS count FROM predictions {where_clause}", params
+                f"SELECT COUNT(*) AS count {join} {where_clause}", params
             ).fetchone()["count"]
             rows = connection.execute(
-                f"SELECT * FROM predictions {where_clause} ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                f"{self.PREDICTION_SELECT} {where_clause} ORDER BY p.rowid DESC LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
 
@@ -364,17 +432,17 @@ class Repository:
     ) -> list[dict[str, Any]]:
         """Return active inspection work independently of the recent-feed limit."""
         with self.connection() as connection:
-            equipment_filter = "AND equip_cd = ?" if equip_cd else ""
+            equipment_filter = "AND p.equip_cd = ?" if equip_cd else ""
             params = (equip_cd, limit) if equip_cd else (limit,)
             rows = connection.execute(
                 f"""
-                SELECT * FROM predictions
-                WHERE inspection_status IN ('검사 대기', '검사 중')
+                {self.PREDICTION_SELECT}
+                WHERE p.inspection_status IN ('검사 대기', '검사 중')
                 {equipment_filter}
                 ORDER BY
-                    CASE inspection_status WHEN '검사 중' THEN 0 ELSE 1 END,
-                    defect_probability DESC,
-                    rowid ASC
+                    CASE p.inspection_status WHEN '검사 중' THEN 0 ELSE 1 END,
+                    p.defect_probability DESC,
+                    p.rowid ASC
                 LIMIT ?
                 """,
                 params,
@@ -384,7 +452,7 @@ class Repository:
     def get_prediction(self, record_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
-                "SELECT * FROM predictions WHERE record_id = ?", (record_id,)
+                f"{self.PREDICTION_SELECT} WHERE p.record_id = ?", (record_id,)
             ).fetchone()
         return self._prediction_row(row) if row else None
 
@@ -474,6 +542,114 @@ class Repository:
             "reason": reason,
             "changed_at": changed_at,
         }
+
+    # ---- 모델 레지스트리 -------------------------------------------------
+    # 서빙 버전은 settings 상수가 아니라 active 행에서 읽는다. 재학습이 새 행을
+    # 넣고 active를 옮기면 예측 경로가 그 다음 요청부터 새 모델을 쓴다.
+
+    def seed_initial_model(
+        self, version: str, model_file: str, train_records: int, train_defects: int
+    ) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO model_registry(
+                    version, model_file, parent_version, source, trigger, reason,
+                    created_by, created_at, train_records, train_defects,
+                    added_records, added_defects, active
+                ) VALUES (?, ?, NULL, '초기 배포', NULL, NULL, NULL, ?, ?, ?, 0, 0, 1)
+                """,
+                (version, model_file, now_iso(), train_records, train_defects),
+            )
+
+    def active_model(self) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM model_registry WHERE active = 1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return self._model_row(row) if row else None
+
+    def register_model(self, entry: dict[str, Any]) -> dict[str, Any]:
+        with self._lock, self.connection() as connection:
+            connection.execute("UPDATE model_registry SET active = 0")
+            connection.execute(
+                """
+                INSERT INTO model_registry(
+                    version, model_file, parent_version, source, trigger, reason,
+                    created_by, created_at, train_records, train_defects,
+                    added_records, added_defects, active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    entry["version"], entry["model_file"], entry.get("parent_version"),
+                    entry["source"], entry.get("trigger"), entry.get("reason"),
+                    entry.get("created_by"), entry["created_at"],
+                    entry["train_records"], entry["train_defects"],
+                    entry.get("added_records", 0), entry.get("added_defects", 0),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM model_registry WHERE version = ?", (entry["version"],)
+            ).fetchone()
+        return self._model_row(row)
+
+    def record_validation(
+        self, version: str, validation: dict[str, Any], threshold_metrics: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """검증 결과를 해당 모델 행에 붙인다. 버전은 바꾸지 않는다."""
+        with self._lock, self.connection() as connection:
+            connection.execute(
+                """
+                UPDATE model_registry
+                SET validated_at = ?, validation = ?, threshold_metrics = ?
+                WHERE version = ?
+                """,
+                (
+                    validation.get("measured_at") or now_iso(),
+                    json.dumps(validation, ensure_ascii=False),
+                    json.dumps(threshold_metrics, ensure_ascii=False),
+                    version,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM model_registry WHERE version = ?", (version,)
+            ).fetchone()
+        if not row:
+            raise KeyError(f"모델 버전을 찾을 수 없습니다: {version}")
+        return self._model_row(row)
+
+    def model_registry(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM model_registry ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._model_row(row) for row in rows]
+
+    def completed_inspections_since(self, moment: str | None) -> list[dict[str, Any]]:
+        """검사 완료 건을 반환한다. moment 이후로 완료된 건만 고른다."""
+        query = """
+            SELECT i.record_id, i.actual_label, i.completed_at, i.evaluation,
+                   p.part, p.part_name, p.supported, p.model_features
+            FROM inspections i JOIN predictions p ON p.record_id = i.record_id
+            WHERE i.completed_at IS NOT NULL
+        """
+        parameters: list[Any] = []
+        if moment:
+            query += " AND i.completed_at > ?"
+            parameters.append(moment)
+        query += " ORDER BY i.completed_at"
+        with self.connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
+
+    def clear_retrained_models(self) -> None:
+        """초기화 시 재학습 이력을 지우고 초기 배포 모델을 다시 활성화한다."""
+        with self._lock, self.connection() as connection:
+            connection.execute("DELETE FROM model_registry WHERE source != '초기 배포'")
+            connection.execute("UPDATE model_registry SET active = 0")
+            connection.execute(
+                "UPDATE model_registry SET active = 1 WHERE source = '초기 배포'"
+            )
 
     def threshold_history(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.connection() as connection:
@@ -576,6 +752,12 @@ class Repository:
             connection.execute("DELETE FROM inspections")
             connection.execute("DELETE FROM predictions")
             connection.execute("DELETE FROM threshold_history")
+            # 재학습 이력을 지우고 초기 배포 모델로 되돌린다. 파일 삭제는 호출부가 한다.
+            connection.execute("DELETE FROM model_registry WHERE source != '초기 배포'")
+            connection.execute("UPDATE model_registry SET active = 0")
+            connection.execute(
+                "UPDATE model_registry SET active = 1 WHERE source = '초기 배포'"
+            )
             connection.execute("UPDATE app_state SET value = '0' WHERE key = 'demo_cursor'")
             connection.execute("UPDATE app_state SET value = '0' WHERE key = 'demo_sequence'")
             connection.execute(
@@ -591,6 +773,18 @@ class Repository:
         result["process_values"] = json.loads(result["process_values"] or "{}")
         result["missing_features"] = json.loads(result.get("missing_features") or "[]")
         result["input_warnings"] = json.loads(result.get("input_warnings") or "[]")
+        # 학습 피처는 재학습만 쓴다. 화면 응답에 실으면 행마다 26개 실수가 붙는다.
+        result.pop("model_features", None)
+        return result
+
+    @staticmethod
+    def _model_row(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["active"] = bool(result["active"])
+        result["validated"] = bool(result.get("validated_at"))
+        for key in ("validation", "threshold_metrics"):
+            raw = result.get(key)
+            result[key] = json.loads(raw) if raw else None
         return result
 
     @staticmethod

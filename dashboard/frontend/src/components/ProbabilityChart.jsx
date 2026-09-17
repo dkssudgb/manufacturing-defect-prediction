@@ -27,8 +27,8 @@ export function ProbabilityChart({ predictions, threshold, onSelect, emptyMessag
       <svg className="probability-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="최근 지원 제품의 불량확률 추이">
         <defs>
           <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ff7557" stopOpacity="0.28" />
-            <stop offset="100%" stopColor="#ff7557" stopOpacity="0" />
+            <stop offset="0%" stopColor="#d9553a" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="#d9553a" stopOpacity="0" />
           </linearGradient>
         </defs>
         {[0, 0.5, 1].map((value) => {
@@ -36,7 +36,7 @@ export function ProbabilityChart({ predictions, threshold, onSelect, emptyMessag
           return <line key={value} x1={padding} y1={y} x2={width - padding} y2={y} className="chart-grid" />;
         })}
         <line x1={padding} y1={thresholdY} x2={width - padding} y2={thresholdY} className="threshold-line" />
-        <text x={width - padding} y={Math.max(14, thresholdY - 7)} textAnchor="end" className="threshold-label">TH {Math.round(threshold * 100)}%</text>
+        <text x={width - padding} y={Math.max(14, thresholdY - 7)} textAnchor="end" className="threshold-label">TH {(threshold * 100).toFixed(1)}%</text>
         {points && <polyline points={`${padding},${height - padding} ${points} ${width - padding},${height - padding}`} fill="url(#riskFill)" stroke="none" />}
         {points && <polyline points={points} fill="none" className="probability-line" />}
         {records.map((record, index) => {
@@ -66,7 +66,7 @@ export function ProbabilityChart({ predictions, threshold, onSelect, emptyMessag
           );
         })}
       </svg>
-      {!records.length && <div className="chart-empty">{emptyMessage || "지원 제품을 수신하면 확률 추이가 표시됩니다."}</div>}
+      {!records.length && <div className="chart-empty">{emptyMessage || "지원 제품을 수신하면 확률 추이가 표시됨"}</div>}
       <div className="chart-x-note">과거 <span>→</span> 최근</div>
     </div>
   );
