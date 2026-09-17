@@ -78,7 +78,7 @@ export function InspectionForm({ record, worker, onSubmit, onCancel, submitting 
       <label className="switch-row">
         <input type="checkbox" checked={additional} onChange={(event) => setAdditional(event.target.checked)} />
         <span className="switch" aria-hidden="true" />
-        <span><strong>추가 검사 필요</strong><small>같은 Lot 또는 후속 제품을 확인 대상으로 표시합니다.</small></span>
+        <span><strong>추가 검사 필요</strong><small>같은 Lot 또는 후속 제품을 확인 대상으로 표시</small></span>
       </label>
 
       <div className="modal-actions">

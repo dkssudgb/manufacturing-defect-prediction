@@ -223,6 +223,13 @@ main { width: min(1360px, 100%); margin: 0 auto; padding: 24px 24px 56px; }
 /* ============================================================
    검사 대기열
    ============================================================ */
+.queue-family { padding: 10px 18px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line-soft); }
+.queue-family button { min-height: 28px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 20px; color: var(--ink-2); background: var(--surface); font-size: var(--fs-micro); font-weight: 700; }
+.queue-family button:hover { color: var(--ink); background: var(--surface-2); }
+.queue-family button.active { color: white; border-color: var(--ink); background: var(--ink); }
+.queue-family button span { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.queue-family button.active span { color: rgba(255, 255, 255, .7); }
+.queue-family small { margin-left: auto; color: var(--ink-3); font-size: var(--fs-micro); }
 .queue-list { max-height: 430px; padding: 4px 8px 8px; overflow-y: auto; }
 .queue-row { width: 100%; min-height: 60px; padding: 8px 10px; display: grid; grid-template-columns: 40px minmax(120px, 1.1fr) 70px minmax(150px, .9fr) 104px 78px 18px; align-items: center; gap: 12px; border: 0; border-bottom: 1px solid var(--line-soft); border-radius: var(--r1); background: transparent; color: inherit; text-align: left; }
 .queue-row:last-child { border-bottom: 0; }
@@ -320,6 +327,21 @@ td strong { color: var(--ink); }
 .pipeline-list svg { color: var(--ink-3); }
 /* 전체 품명(CN7 W/S SIDE MLD'G LH)은 2열에 넣으면 끝의 LH/RH가 잘린다.
    그 두 글자가 좌우를 가르는 정보라 한 열로 둔다. */
+.inference-path { margin: 0; padding: 6px 18px 14px; list-style: none; }
+.inference-path li { position: relative; padding: 12px 0 12px 38px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--line-soft); }
+.inference-path li:last-child { border-bottom: 0; }
+/* 단계를 잇는 세로선. 첫 단계 위와 마지막 단계 아래는 비운다 */
+.inference-path li::before { content: ""; position: absolute; top: 0; bottom: 0; left: 10px; border-left: 1px solid var(--line); }
+.inference-path li:first-child::before { top: 50%; }
+.inference-path li:last-child::before { bottom: 50%; }
+.step-no { position: absolute; top: 50%; left: 0; z-index: 1; width: 21px; height: 21px; display: grid; place-items: center; border-radius: 50%; color: var(--ink-3); background: var(--surface-2); font-size: var(--fs-micro); font-weight: 700; transform: translateY(-50%); }
+.inference-path strong { display: block; font-size: var(--fs-sm); }
+.inference-path p { margin: 4px 0 0; color: var(--ink-3); font-size: var(--fs-micro); line-height: 1.6; }
+.inference-path .gate .step-no { color: var(--risk); background: var(--risk-soft); }
+.inference-path .model-step .step-no { color: var(--accent); background: var(--accent-soft); }
+.gate-chip, .model-chip { padding: 4px 9px; border-radius: 20px; font-size: var(--fs-micro); font-weight: 700; white-space: nowrap; }
+.gate-chip { color: var(--risk); background: var(--risk-soft); }
+.model-chip { color: var(--accent); background: var(--accent-soft); }
 .part-grid { padding: 14px 18px; display: grid; gap: 8px; }
 .part-grid > div { padding: 10px 12px; display: grid; grid-template-columns: 22px 1fr; align-items: center; border: 1px solid var(--line); border-radius: var(--r1); }
 .part-grid svg { grid-row: 1 / 3; color: var(--ok); }
@@ -331,7 +353,14 @@ td strong { color: var(--ink); }
 /* 패널 마지막에 오는 안내문은 아래 여백이 없으면 패널의 둥근 테두리와 맞물려
    겹쳐 보인다. 패널 자체에 하단 패딩이 없기 때문이다. */
 .validation-warning:last-child { margin-bottom: 18px; }
-.validation-panel .table-scroll { margin-top: 14px; }
+.table-intro { margin: 0; padding: 13px 18px; color: var(--ink-2); font-size: var(--fs-micro); line-height: 1.7; border-bottom: 1px solid var(--line-soft); }
+/* 굵은 도입구는 제목처럼 한 줄을 차지하고, 설명은 그 아래로 내린다 */
+.table-intro strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: var(--fs-xs); }
+.table-footnotes { padding: 13px 18px 15px; display: grid; gap: 5px; border-top: 1px solid var(--line-soft); }
+/* 레이블을 inline-block으로 띄우면 둘째 줄이 레이블 아래로 파고든다.
+   2열 그리드로 두어 본문이 여러 줄이어도 왼쪽 끝이 맞는다. */
+.table-footnotes p { margin: 0; display: grid; grid-template-columns: 72px 1fr; gap: 10px; color: var(--ink-3); font-size: var(--fs-micro); line-height: 1.7; }
+.table-footnotes strong { color: var(--ink-2); }
 
 /* ============================================================
    모델 운영 · 재학습
@@ -355,6 +384,12 @@ td strong { color: var(--ink); }
    36px만큼 패널 밖으로 삐져나간다. flex 컬럼의 stretch가 여백을 뺀 너비로
    늘려주므로 width를 해제한다. */
 .retrain-panel .button.full { width: auto; margin-top: auto; margin-bottom: 18px; }
+/* 설명 한 줄과 액션을 한 행에 두고, 근거는 아래 각주로 내린다.
+   다른 패널(검증 성능표, 07_2 근거표)과 같은 구조다. */
+.validate-body { padding: 15px 18px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 18px; }
+.validate-body p { margin: 0; color: var(--ink-2); font-size: var(--fs-xs); line-height: 1.7; }
+.validate-body strong { color: var(--ink); }
+.validate-body .button { white-space: nowrap; }
 
 /* ============================================================
    모달
@@ -504,6 +539,8 @@ td strong { color: var(--ink); }
   .metric-bar.three .metric:nth-child(3) { border-left: 0; border-top: 1px solid var(--line-soft); }
   .metric { padding: 12px 14px; }
   .metric strong { font-size: 1.2rem; }
+  .validate-body { grid-template-columns: 1fr; }
+  .validate-body .button { justify-self: stretch; }
   .replay-bar { display: block; }
   .replay-actions, .replay-progress { margin-top: 12px; }
   .panel-header { padding: 13px 14px; }
@@ -512,6 +549,8 @@ td strong { color: var(--ink); }
   .chart-wrap { padding-left: 29px; padding-right: 10px; }
   .chart-summary { padding: 11px 14px; }
   .chart-summary div { padding: 0 9px; }
+  .queue-family { padding: 10px 14px; flex-wrap: wrap; }
+  .queue-family small { display: none; }
   .queue-list { padding: 3px 6px 8px; }
   .queue-row { grid-template-columns: 36px 1fr 86px 16px; gap: 8px; padding: 8px 6px; }
   .queue-row .probability-cell > span, .queue-row .probability-cell div { display: none; }
@@ -531,6 +570,9 @@ td strong { color: var(--ink); }
   .pipeline-list { display: grid; gap: 10px; }
   .pipeline-list > div { grid-template-columns: 22px 1fr; }
   .pipeline-list svg { display: none; }
+  .inference-path li { grid-template-columns: 1fr; }
+  .gate-chip, .model-chip { justify-self: start; }
+  .table-footnotes p { grid-template-columns: 1fr; gap: 2px; }
   .part-grid { grid-template-columns: 1fr; }
   .toast { right: 12px; bottom: 12px; left: 12px; min-width: 0; }
 }

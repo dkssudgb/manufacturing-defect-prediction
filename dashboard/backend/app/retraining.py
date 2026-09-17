@@ -4,16 +4,15 @@ The dashboard is the only source of labels for the replayed period: the demo
 sample carries no `PassOrFail`, so a row becomes training data only after a
 worker inspects it and records the real outcome.
 
-Two facts shape this module.
+Training rows come from the database alone. Every prediction stores the 26
+features that actually entered the model in `predictions.model_features`, after
+the recording corrections have been applied, so a completed inspection carries
+its own training row. Earlier this module recovered the features by joining
+`record_id` back to the replay CSV; that worked for the demo but would not work
+against a real line, where no such file exists.
 
-1. The database keeps only eight process values per prediction
-   (`prediction.DISPLAY_PROCESS_COLUMNS`), not the 26 the model needs. The
-   missing 18 are recovered by joining `predictions.record_id` back to the
-   replay CSV, whose `_id` is the same identifier.
-2. `data/labeled_modeling.csv` is already corrected (02_EDA writes it), while
-   the replay CSV holds raw recorded values. New rows therefore pass through
-   `apply_record_corrections` before they are appended, or the two halves of the
-   training set would sit on different scales.
+Because the stored features are already corrected, they sit on the same scale as
+`data/labeled_modeling.csv`, which 02_EDA writes with the same rules.
 
 Retraining does not touch `labeled_modeling.csv`. Labels collected from
 inspections accumulate in `RETRAIN_LABELS_PATH` and are concatenated at fit
@@ -21,6 +20,7 @@ time, so the analysis artefact stays authoritative and a reset can undo
 everything by deleting one file.
 """
 
+import json
 import shutil
 from datetime import datetime, timezone
 from typing import Any
@@ -31,8 +31,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .corrections import apply_record_corrections
-from .demo_data import get_demo_data
 from .model_loader import activate_model, load_feature_columns, load_threshold_metrics
 from .settings import (
     AUTO_RETRAIN_MIN_LABELS,
@@ -42,7 +40,6 @@ from .settings import (
     RETRAIN_ESTIMATOR_PARAMS,
     RETRAIN_LABELS_PATH,
     RETRAINED_MODEL_DIR,
-    SUPPORTED_PARTS,
     TRAINING_DROP_COLUMNS,
 )
 
@@ -59,33 +56,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def part_of(part_name: Any) -> str | None:
-    """PART_NAME에서 학습에 쓰는 Part 범주를 만든다 (앞 3글자 + 뒤 2글자)."""
-    if part_name is None:
-        return None
-    text = str(part_name)
-    return text[:3] + text[-2:] if len(text) >= 5 else None
-
-
-def _replay_rows_by_id() -> dict[str, dict[str, Any]]:
-    """재생 표본을 _id로 찾을 수 있게 색인한다."""
-    index: dict[str, dict[str, Any]] = {}
-    for row in get_demo_data().records:
-        identifier = row.get("_id") or row.get("record_id")
-        if identifier is not None:
-            index[str(identifier)] = row
-    return index
-
-
 def collect_labels(inspections: list[dict[str, Any]]) -> tuple[pd.DataFrame, list[str]]:
     """검사 완료 건을 학습 가능한 행으로 바꾼다.
 
+    피처는 예측 시점에 저장한 `predictions.model_features`에서 읽는다.
     반환: (행 프레임, 건너뛴 이유 목록)
     """
     feature_columns = load_feature_columns()
-    numeric_columns = [c for c in feature_columns if not c.startswith("Part_")]
-    replay = _replay_rows_by_id()
-
     rows: list[dict[str, Any]] = []
     skipped: list[str] = []
 
@@ -94,39 +71,26 @@ def collect_labels(inspections: list[dict[str, Any]]) -> tuple[pd.DataFrame, lis
         if not inspection.get("supported"):
             skipped.append(f"{record_id}: 모델 지원 대상이 아님")
             continue
-        source = replay.get(record_id)
-        if source is None:
-            skipped.append(f"{record_id}: 재생 표본에서 원본 행을 찾지 못함")
+
+        try:
+            features = json.loads(inspection.get("model_features") or "{}")
+        except (TypeError, ValueError):
+            features = {}
+        if not features:
+            # 이 컬럼이 생기기 전에 예측된 행이다. 초기화하면 다시 채워진다.
+            skipped.append(f"{record_id}: 저장된 학습 피처가 없음 (초기화 후 재생 필요)")
             continue
 
-        part = inspection.get("part") or part_of(source.get("PART_NAME"))
-        if part not in SUPPORTED_PARTS:
-            skipped.append(f"{record_id}: 학습되지 않은 Part 범주({part})")
+        missing = [column for column in feature_columns if column not in features]
+        if missing:
+            skipped.append(f"{record_id}: 학습 피처 누락 {len(missing)}개")
             continue
 
-        raw: dict[str, float] = {}
-        invalid = False
-        for column in numeric_columns:
-            value = source.get(column)
-            if value is None:
-                invalid = True
-                break
-            try:
-                raw[column] = float(value)
-            except (TypeError, ValueError):
-                invalid = True
-                break
-        if invalid:
-            skipped.append(f"{record_id}: 공정 변수 결측 또는 형식 오류")
-            continue
-
-        # 학습 데이터와 같은 스케일로 맞춘다. 서빙 예측이 쓰는 함수와 동일하다.
-        corrected, _ = apply_record_corrections(raw)
-        corrected["Part"] = part
-        corrected[LABEL_COLUMN] = 1 if inspection.get("actual_label") == DEFECT_LABEL else 0
-        corrected["record_id"] = record_id
-        corrected["completed_at"] = inspection.get("completed_at")
-        rows.append(corrected)
+        row = {column: float(features[column]) for column in feature_columns}
+        row[LABEL_COLUMN] = 1 if inspection.get("actual_label") == DEFECT_LABEL else 0
+        row["record_id"] = record_id
+        row["completed_at"] = inspection.get("completed_at")
+        rows.append(row)
 
     return pd.DataFrame(rows), skipped
 
@@ -152,36 +116,47 @@ def merge_labels(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
     return merged.drop_duplicates(subset="record_id", keep="last").reset_index(drop=True)
 
 
-def _build_matrix(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def _matrix_from_base(base: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """기준 학습 데이터를 모델 입력 행렬로 만든다 (06_Final_Model.ipynb 셀 10과 동일)."""
     feature_columns = load_feature_columns()
-    features = frame.drop(columns=[c for c in TRAINING_DROP_COLUMNS if c in frame.columns])
-    features = features.drop(columns=[c for c in ("record_id", "completed_at") if c in features.columns])
+    features = base.drop(columns=[c for c in TRAINING_DROP_COLUMNS if c in base.columns])
     target = features[LABEL_COLUMN]
     features = features.drop(columns=LABEL_COLUMN)
     features = pd.get_dummies(features, columns=["Part"], drop_first=True, dtype=int)
-    # 검사 표본에 없는 Part 더미가 생기지 않도록 학습 시 컬럼 순서에 맞춘다.
     for column in feature_columns:
         if column not in features.columns:
             features[column] = 0
     return features[feature_columns], target
 
 
+def _matrix_from_labels(labels: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """검사로 확보한 라벨을 행렬로 만든다.
+
+    이 행들은 예측 시점에 저장된 값이라 이미 26개 피처 형태다. 기준 데이터처럼
+    `Part` 문자열을 더미로 펼치는 단계가 없다.
+    """
+    feature_columns = load_feature_columns()
+    target = labels[LABEL_COLUMN]
+    features = labels.reindex(columns=feature_columns).fillna(0)
+    return features, target
+
+
 def build_training_frame(labels: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, dict[str, int]]:
     if not BASE_TRAINING_DATA_PATH.exists():
         raise RetrainError(f"기준 학습 데이터가 없습니다: {BASE_TRAINING_DATA_PATH}")
     base = pd.read_csv(BASE_TRAINING_DATA_PATH, index_col=0)
+    base_features, base_target = _matrix_from_base(base)
 
     if labels.empty:
-        combined = base
+        features, target = base_features, base_target
     else:
-        # 기준 데이터에 있는 컬럼만 남겨 붙인다.
-        usable = [c for c in labels.columns if c in base.columns]
-        combined = pd.concat([base, labels[usable]], ignore_index=True)
+        label_features, label_target = _matrix_from_labels(labels)
+        features = pd.concat([base_features, label_features], ignore_index=True)
+        target = pd.concat([base_target, label_target], ignore_index=True)
 
-    features, target = _build_matrix(combined)
     counts = {
-        "base_records": int(len(base)),
-        "base_defects": int((base[LABEL_COLUMN] == 1).sum()),
+        "base_records": int(len(base_features)),
+        "base_defects": int((base_target == 1).sum()),
         "added_records": int(len(labels)),
         "added_defects": int((labels[LABEL_COLUMN] == 1).sum()) if not labels.empty else 0,
         "train_records": int(len(features)),
@@ -191,16 +166,20 @@ def build_training_frame(labels: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series,
 
 
 def next_version(current: str | None) -> str:
-    """v1.1.0 -> v1.2.0 처럼 마이너 자리를 올린다."""
+    """v1.1.0 -> v1.1.1 처럼 패치 자리를 올린다.
+
+    재학습은 검사 5건마다 돌 수 있어 시연 한 번에도 여러 번 일어난다. 라벨
+    5건 추가가 마이너 버전 하나만큼의 변화는 아니므로 패치 자리를 쓴다.
+    마이너 자리는 검증을 다시 수행해 성능표를 확정했을 때 올린다.
+    """
     text = (current or INITIAL_MODEL_VERSION).lstrip("v")
     parts = text.split(".")
     while len(parts) < 3:
         parts.append("0")
     try:
-        parts[1] = str(int(parts[1]) + 1)
+        parts[2] = str(int(parts[2]) + 1)
     except ValueError:
         return f"{current}-retrained"
-    parts[2] = "0"
     return "v" + ".".join(parts)
 
 

@@ -66,7 +66,7 @@ export function ProbabilityChart({ predictions, threshold, onSelect, emptyMessag
           );
         })}
       </svg>
-      {!records.length && <div className="chart-empty">{emptyMessage || "지원 제품을 수신하면 확률 추이가 표시됩니다."}</div>}
+      {!records.length && <div className="chart-empty">{emptyMessage || "지원 제품을 수신하면 확률 추이가 표시됨"}</div>}
       <div className="chart-x-note">과거 <span>→</span> 최근</div>
     </div>
   );

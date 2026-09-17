@@ -463,6 +463,7 @@ def test_retrain_without_labels_is_rejected(client):
 
 
 def test_retrain_uses_inspection_labels_and_swaps_model(client):
+    from app.retraining import next_version
     from app.settings import AUTO_RETRAIN_MIN_LABELS
 
     client.post("/demo/reset")
@@ -478,22 +479,23 @@ def test_retrain_uses_inspection_labels_and_swaps_model(client):
     )
     assert response.status_code == 200
     entry = response.json()
-    assert entry["version"] == "v1.2.0"
+    assert entry["version"] == next_version("v1.1.0")
     assert entry["trigger"] == "수동"
     # 기준 5,230건에 검사로 확보한 라벨이 더해진다
     assert entry["train_records"] == 5230 + labels
     assert entry["added_records"] == labels
     assert entry["skipped"] == []
 
-    # 서버 재시작 없이 서빙 모델이 바뀐다
-    assert client.get("/health").json()["model_version"] == "v1.2.0"
+    # 서버 재시작 없이 운영 모델이 바뀐다
+    expected = next_version("v1.1.0")
+    assert client.get("/health").json()["model_version"] == expected
     info = client.get("/model/info").json()
-    assert info["model_version"] == "v1.2.0"
+    assert info["model_version"] == expected
     assert info["validation_stale"] is True
 
     client.post("/demo/next", json={"count": 1})
     latest = client.get("/predictions?limit=1").json()
-    assert latest[0]["model_version"] == "v1.2.0"
+    assert latest[0]["model_version"] == expected
 
 
 def test_auto_retrain_fires_at_threshold(client):
@@ -520,12 +522,13 @@ def test_auto_retrain_fires_at_threshold(client):
 
 
 def test_reset_restores_initial_model(client):
+    from app.retraining import next_version
     from app.settings import AUTO_RETRAIN_MIN_LABELS
 
     client.post("/demo/reset")
     complete_inspections(client, AUTO_RETRAIN_MIN_LABELS - 1)
     client.post("/model/retrain", json={"actor": "이분석", "reason": "초기화 점검"})
-    assert client.get("/health").json()["model_version"] == "v1.2.0"
+    assert client.get("/health").json()["model_version"] == next_version("v1.1.0")
 
     client.post("/demo/reset")
     registry = client.get("/model/registry").json()
@@ -550,6 +553,7 @@ def test_validation_numbers_stay_tied_to_initial_model(client):
     자동 갱신될 수 없다. 화면이 새 버전 옆에 옛 수치를 그대로 보여주면
     오해를 만들기 때문에 validation_stale로 구분한다.
     """
+    from app.retraining import next_version
     from app.settings import AUTO_RETRAIN_MIN_LABELS
 
     client.post("/demo/reset")
@@ -563,8 +567,8 @@ def test_validation_numbers_stay_tied_to_initial_model(client):
     client.post("/model/retrain", json={"actor": "이분석", "reason": "검증 표시 점검"})
     after = client.get("/model/info").json()
 
-    # 서빙 모델을 따라 바뀌는 값
-    assert after["model_version"] == "v1.2.0"
+    # 운영 모델을 따라 바뀌는 값
+    assert after["model_version"] == next_version("v1.1.0")
     assert after["train_records"] == 5230 + labels
     assert after["validation_stale"] is True
 
@@ -702,3 +706,184 @@ def test_reserve_demo_sequence_hands_out_disjoint_ranges():
     assert (start, count) == (95, 5)
     start, count = repository.reserve_demo_sequence(10, 100)
     assert count == 0
+
+
+def test_predictions_store_the_model_input_features(client):
+    """예측 시점에 26개 학습 피처를 남겨야 재학습이 가능하다.
+
+    검사 결과만으로는 학습 행을 만들 수 없다. 예전에는 record_id로 재생 CSV를
+    조인해 복원했는데 실제 라인에는 그런 파일이 없다.
+    """
+    import json as _json
+    import sqlite3
+
+    from app.model_loader import load_feature_columns
+    from app.settings import DATABASE_PATH
+
+    client.post("/demo/reset")
+    connection = sqlite3.connect(DATABASE_PATH)
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute(
+        "SELECT predictable, model_features FROM predictions"
+    ).fetchall()
+    connection.close()
+
+    expected = set(load_feature_columns())
+    predictable = [row for row in rows if row["predictable"]]
+    assert predictable
+    for row in predictable:
+        assert set(_json.loads(row["model_features"])) == expected
+
+    # 예측하지 않은 행에는 남기지 않는다
+    for row in rows:
+        if not row["predictable"]:
+            assert _json.loads(row["model_features"]) == {}
+
+    # 화면 응답에는 싣지 않는다. 행마다 26개 실수가 붙으면 순수한 낭비다.
+    assert "model_features" not in client.get("/predictions?limit=1").json()[0]
+
+
+def test_retraining_does_not_read_the_replay_sample():
+    """재학습 경로가 재생 CSV를 참조하면 실제 라인에서 돌지 않는다."""
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "app" / "retraining.py"
+    text = source.read_text(encoding="utf-8")
+    body = "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("#")
+    )
+    for forbidden in ("get_demo_data", "DEMO_DATA_PATH", "realtime_sample"):
+        assert forbidden not in body, f"재학습이 여전히 {forbidden}에 의존한다"
+
+
+# ---- 검증 재측정 ---------------------------------------------------------
+
+
+def test_retrain_bumps_the_patch_position(client):
+    """재학습은 패치 자리를 올린다.
+
+    검사 5건마다 돌 수 있어 시연 한 번에도 여러 번 일어난다. 라벨 5건 추가가
+    마이너 버전 하나만큼의 변화는 아니다.
+    """
+    from app.retraining import next_version
+
+    assert next_version("v1.1.0") == "v1.1.1"
+    assert next_version("v1.1.9") == "v1.1.10"
+    assert next_version(None) == "v1.1.1"
+
+
+def test_validation_replaces_the_numbers_and_clears_the_stale_flag(client):
+    """검증을 실행하면 그 모델 기준 수치로 바뀌고 경고가 사라진다."""
+    from app.retraining import next_version
+    from app.settings import AUTO_RETRAIN_MIN_LABELS
+
+    client.post("/demo/reset")
+    base = client.get("/model/info").json()
+    assert base["validation_stale"] is False
+    assert base["validated_at"] is None
+
+    complete_inspections(client, AUTO_RETRAIN_MIN_LABELS)
+    retrained = client.get("/model/info").json()
+    assert retrained["model_version"] == next_version("v1.1.0")
+    # 재학습 직후에는 옛 모델의 수치가 그대로 남고 경고가 뜬다
+    assert retrained["validation_stale"] is True
+    assert retrained["validation"]["records"] == base["validation"]["records"]
+
+    response = client.post("/model/validate")
+    assert response.status_code == 200
+    entry = response.json()
+    assert entry["version"] == next_version("v1.1.0")
+    assert entry["validated"] is True
+
+    validated = client.get("/model/info").json()
+    assert validated["validation_stale"] is False
+    assert validated["validated_at"]
+    # 이제 수치가 이 모델의 학습 규모를 따른다
+    assert validated["validation"]["records"] == 5230 + AUTO_RETRAIN_MIN_LABELS
+    assert validated["threshold_metrics"] != base["threshold_metrics"]
+
+    ratios = [row["inspect_ratio"] for row in validated["threshold_metrics"]]
+    assert ratios == sorted(ratios)
+    for row in validated["threshold_metrics"]:
+        assert 0 <= row["recall_at_k"] <= 1
+        assert 0 <= row["precision_at_k"] <= 1
+        # Lift는 검출률을 검사 물량으로 나눈 값이다
+        assert row["lift"] == pytest.approx(row["recall_at_k"] / row["inspect_ratio"], abs=0.02)
+
+
+def test_validation_is_recorded_per_model_version(client):
+    """검증 여부는 모델 행에 남고 초기화하면 함께 사라진다."""
+    from app.retraining import next_version
+    from app.settings import AUTO_RETRAIN_MIN_LABELS
+
+    client.post("/demo/reset")
+    complete_inspections(client, AUTO_RETRAIN_MIN_LABELS)
+    client.post("/model/validate")
+
+    registry = {row["version"]: row for row in client.get("/model/registry").json()}
+    assert registry[next_version("v1.1.0")]["validated"] is True
+    assert registry["v1.1.0"]["validated"] is False
+
+    client.post("/demo/reset")
+    registry = client.get("/model/registry").json()
+    assert [row["version"] for row in registry] == ["v1.1.0"]
+    assert registry[0]["validated"] is False
+
+
+def test_inspection_queue_keeps_probability_order_across_families(client):
+    """대기열 정렬은 확률 내림차순을 유지해야 한다.
+
+    제품군이 섞이는 것은 금형 교체 후 이전 제품군의 미검사 건이 남기 때문이고,
+    화면에서 제품군 필터로 해결한다. 정렬 자체를 제품군 우선으로 바꾸면
+    다른 제품군의 높은 확률 건이 뒤로 밀려 운영 원칙(plan.md 7절)이 깨진다.
+    """
+    client.post("/demo/reset")
+    # 금형이 바뀌는 지점(500번째) 이후까지 재생해 두 제품군이 함께 남게 한다
+    for _ in range(25):
+        client.post("/demo/next", json={"count": 20})
+
+    queue = client.get("/inspection-queue?limit=500").json()
+    waiting = [item for item in queue if item["inspection_status"] == "검사 대기"]
+    assert len(waiting) > 1
+
+    probabilities = [item["defect_probability"] for item in waiting]
+    assert probabilities == sorted(probabilities, reverse=True)
+
+    families = {item["part"][:3] for item in waiting}
+    assert families == {"CN7", "RG3"}, "두 제품군이 함께 남는 상황이어야 의미가 있다"
+
+    # 제품군으로 거르면 그 안에서도 확률 순서가 유지된다
+    for family in families:
+        subset = [item for item in waiting if item["part"].startswith(family)]
+        assert subset
+        values = [item["defect_probability"] for item in subset]
+        assert values == sorted(values, reverse=True)
+
+
+def test_inference_path_matches_the_code(client):
+    """화면의 추론 경로가 실제 예측 경로와 어긋나면 안 된다.
+
+    model_info.json의 pipeline은 pkl 안의 sklearn 단계 2개일 뿐이라
+    보정과 관문이 화면에서 통째로 빠져 있었다. inference_path가 실제
+    분기를 설명하므로, 관문이 말하는 판정 문구가 코드에 실재하는지 본다.
+    """
+    from pathlib import Path
+
+    info = client.get("/model/info").json()
+    path = info["inference_path"]
+    assert len(path) >= 10
+
+    # 모델 내부 단계는 pkl의 단계 수와 같아야 한다
+    assert sum(1 for step in path if step.get("model")) == len(info["pipeline"])
+
+    backend = Path(__file__).resolve().parents[1] / "app"
+    sources = (backend / "prediction.py").read_text(encoding="utf-8") + (
+        backend / "main.py"
+    ).read_text(encoding="utf-8")
+    for step in path:
+        gate = step.get("gate")
+        if not gate:
+            continue
+        # "예측 불가 (입력 오류)"처럼 괄호 설명이 붙은 경우 앞부분만 본다
+        label = gate.split(" (")[0]
+        assert f'"{label}"' in sources, f"{step['label']} 관문의 판정 문구가 코드에 없다: {label}"

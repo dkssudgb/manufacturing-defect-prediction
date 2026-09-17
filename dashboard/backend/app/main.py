@@ -16,6 +16,7 @@ from .model_loader import (
 from .prediction import predict_record, predict_records
 from .repository import repository
 from .retraining import RetrainError, clear_retrained_artifacts, retrain, retrain_status
+from .validation import run_validation
 from .schemas import (
     BatchPredictionRequest,
     DemoAdvance,
@@ -199,6 +200,7 @@ def model_info():
     info = load_model_info()
     active = repository.active_model()
     retrained = bool(active and active["source"] != "초기 배포")
+    threshold_metrics = load_threshold_metrics()
     if active:
         info = {
             **info,
@@ -210,12 +212,18 @@ def model_info():
             "added_records": active["added_records"],
             "added_defects": active["added_defects"],
         }
+        # 이 모델로 검증을 다시 수행했으면 그 수치를 쓴다.
+        if active["validated"]:
+            info["validation"] = active["validation"]
+            threshold_metrics = active["threshold_metrics"]
     return {
         **info,
-        "validation_stale": retrained,
+        # 재학습됐는데 아직 검증하지 않은 모델일 때만 경고한다.
+        "validation_stale": retrained and not (active and active["validated"]),
+        "validated_at": active["validated_at"] if active else None,
         "supported_part_names": SUPPORTED_PART_NAMES,
         "current_threshold": repository.current_threshold(),
-        "threshold_metrics": load_threshold_metrics(),
+        "threshold_metrics": threshold_metrics,
     }
 
 
@@ -238,6 +246,23 @@ def model_retrain_status():
         **retrain_status(repository, repository.current_threshold(), summary["operating"]),
         "auto_enabled": AUTO_RETRAIN_ENABLED,
     }
+
+
+@app.post("/model/validate")
+def model_validate():
+    """운영 중인 모델의 학습 데이터로 교차검증을 다시 수행한다.
+
+    재학습(0.53초)의 14배인 약 7.6초가 걸린다. 자동 재학습에 끼우지 않고
+    분석 담당자가 필요할 때 실행한다.
+    """
+    active = repository.active_model()
+    if not active:
+        raise HTTPException(status_code=409, detail="운영 중인 모델이 없습니다.")
+    result = run_validation()
+    entry = repository.record_validation(
+        active["version"], result["validation"], result["threshold_metrics"]
+    )
+    return entry
 
 
 @app.post("/model/retrain")
