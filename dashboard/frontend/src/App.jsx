@@ -462,6 +462,13 @@ function ModelView({ modelInfo, walkforward }) {
             </div>
           </div>
         )}
+        <div className="validation-score">
+          <div>
+            <span>AP (Average Precision)</span>
+            <strong>{modelInfo.validation.average_precision_mean.toFixed(4)}</strong>
+          </div>
+          <span>반복 측정 표준편차 ± {modelInfo.validation.average_precision_std.toFixed(4)}</span>
+        </div>
         <p className="table-intro">
           <strong>k는 검사 물량</strong>
           <span>
