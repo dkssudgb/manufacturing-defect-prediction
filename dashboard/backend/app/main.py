@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from . import artifacts
 from .demo_data import get_demo_data
 from .model_loader import (
     activate_model,
@@ -156,6 +157,8 @@ def maybe_auto_retrain() -> dict[str, Any] | None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     repository.init()
+    # 재학습 모델 파일을 먼저 받아둔다. 없으면 seed_model_registry가 초기 모델로 되돌린다.
+    artifacts.restore()
     seed_model_registry()
     load_model()
     load_feature_columns()

@@ -3,8 +3,11 @@ uvicorn[standard]>=0.35,<1
 pydantic>=2.11,<3
 pandas>=2.2,<4
 joblib>=1.4,<2
-scikit-learn>=1.9,<2
+# 모델 파일이 1.9.0으로 저장돼 있다. 버전이 다르면 unpickle 경고가 나고 결과를 보장하지 않는다.
+scikit-learn==1.9.0
 imbalanced-learn>=0.14,<1
 httpx>=0.28,<1
+psycopg[binary]>=3.2,<4
+psycopg-pool>=3.2,<4
 pytest>=8.4,<10
 

@@ -94,7 +94,20 @@ FastAPI 서버 하나가 API와 React 빌드 결과(`frontend/dist`)를 함께 �
 
 `VITE_API_BASE_URL=/api`는 빌드 명령에서 꼭 지정합니다. 저장소에 있는 `frontend/.env.local`(`127.0.0.1:8001`)이 빌드에도 적용되기 때문입니다.
 
-무료 플랜은 디스크가 임시라 재배포·재시작(15분 미접속 후 깨어날 때 포함) 시 `dashboard_data.db`와 재학습 결과가 사라지고 v1.1.0·250건 재생 상태로 돌아갑니다. 시연 초기화와 같은 상태입니다. 발표 직전에 링크를 한 번 열어 서버를 깨워 둡니다.
+### Supabase 연결 (기록 유지)
+
+Render 무료 플랜은 디스크가 임시라 재배포·재시작(15분 미접속 후 깨어날 때 포함) 때 로컬 파일이 사라집니다. 아래 환경변수를 Render에 넣으면 기록과 재학습 결과가 Supabase에 남습니다. 비워두면 지금처럼 SQLite와 로컬 파일을 씁니다.
+
+| 환경변수 | 값 | 용도 |
+|---|---|---|
+| `DATABASE_URL` | Supabase **Session pooler** 연결 문자열 (`postgresql://postgres.<ref>:<비밀번호>@aws-...pooler.supabase.com:5432/postgres`) | 예측·검사·Threshold·모델 이력 |
+| `SUPABASE_URL` | `https://<ref>.supabase.co` | Storage 주소 |
+| `SUPABASE_SECRET_KEY` | Secret key(`sb_secret_...`) 또는 예전 `service_role` 키 | 재학습 모델·누적 라벨 보관 (비공개 버킷 `dashboard-artifacts`) |
+
+- 테이블과 버킷은 서버가 처음 기동할 때 만듭니다. 테이블에는 RLS를 켜고 정책을 두지 않아 공개 키로는 접근할 수 없습니다.
+- Direct connection(`db.<ref>.supabase.co`)은 IPv6 전용이라 Render에서 연결되지 않습니다. Session pooler 주소를 씁니다.
+- 테스트는 운영 DB를 쓰지 않습니다. Postgres로 테스트하려면 `TEST_DATABASE_URL`을 따로 지정합니다.
+- `supabase/migrations/001_quality_dashboard.sql`은 로그인 연동용 초안이며 현재 서버 스키마와 다릅니다. 적용하지 않습니다.
 
 ## 검증
 

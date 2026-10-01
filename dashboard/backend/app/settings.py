@@ -33,6 +33,17 @@ RETRAIN_LABELS_PATH = (
 )
 RETRAINED_MODEL_DIR = MODEL_DIR / ("retrained_test" if _TESTING else "retrained")
 
+# 배포(Supabase) 설정. 비어 있으면 로컬 SQLite와 로컬 파일만 쓴다.
+# 테스트는 데이터를 지우므로 운영 DB를 절대 쓰지 않는다. Postgres로 테스트할 때는
+# TEST_DATABASE_URL을 따로 지정한다.
+DATABASE_URL = os.getenv("TEST_DATABASE_URL") if _TESTING else os.getenv("DATABASE_URL")
+SUPABASE_URL = None if _TESTING else (os.getenv("SUPABASE_URL") or "").rstrip("/") or None
+SUPABASE_SECRET_KEY = None if _TESTING else (
+    os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+)
+# 재학습 모델과 누적 라벨을 보관하는 비공개 버킷
+ARTIFACT_BUCKET = os.getenv("SUPABASE_ARTIFACT_BUCKET", "dashboard-artifacts")
+
 INITIAL_MODEL_VERSION = "v1.1.0"
 # 예전 코드 호환용. 실제 서빙 버전은 model_registry의 active 행에서 읽는다.
 MODEL_VERSION = INITIAL_MODEL_VERSION

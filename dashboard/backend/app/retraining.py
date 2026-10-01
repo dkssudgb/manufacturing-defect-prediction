@@ -31,6 +31,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from . import artifacts
 from .model_loader import activate_model, load_feature_columns, load_threshold_metrics
 from .settings import (
     AUTO_RETRAIN_MIN_LABELS,
@@ -221,6 +222,10 @@ def retrain(
     model_file = path.relative_to(MODEL_DIR).as_posix()
 
     save_accumulated_labels(accumulated)
+    # DB에 새 버전을 올리기 전에 파일부터 보관한다. 순서가 반대면 업로드가 실패했을 때
+    # 재시작 후 DB는 있는 버전을 가리키는데 파일이 없는 상태가 된다.
+    artifacts.upload_model(model_file)
+    artifacts.upload_labels()
     entry = repository.register_model(
         {
             "version": version,
@@ -253,6 +258,7 @@ def clear_retrained_artifacts() -> None:
         RETRAIN_LABELS_PATH.unlink()
     if RETRAINED_MODEL_DIR.exists():
         shutil.rmtree(RETRAINED_MODEL_DIR, ignore_errors=True)
+    artifacts.clear()
 
 
 def operating_precision(summary_operating: dict[str, int]) -> float | None:

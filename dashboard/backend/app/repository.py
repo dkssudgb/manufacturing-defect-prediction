@@ -5,20 +5,185 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Iterator
 
-from .settings import DATABASE_PATH, DEFAULT_THRESHOLD
+from .settings import DATABASE_PATH, DATABASE_URL, DEFAULT_THRESHOLD
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# SQLite와 Postgres가 같이 쓰는 스키마. 방언마다 다른 타입만 자리표시자로 둔다.
+# 시각은 ISO 문자열(TEXT), 참·거짓은 0/1(INTEGER), JSON은 TEXT로 저장한다.
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS predictions (
+    {prediction_seq}
+    record_id TEXT PRIMARY KEY,
+    produced_at TEXT,
+    part TEXT,
+    part_no TEXT,
+    part_name TEXT NOT NULL,
+    equip_cd TEXT,
+    equip_name TEXT,
+    supported INTEGER NOT NULL,
+    unsupported_reason TEXT,
+    defect_probability {real},
+    threshold {real} NOT NULL,
+    predicted_label INTEGER,
+    prediction TEXT NOT NULL,
+    inspection_status TEXT,
+    model_version TEXT NOT NULL,
+    process_values TEXT NOT NULL DEFAULT '{{}}',
+    predictable INTEGER NOT NULL DEFAULT 1,
+    missing_features TEXT NOT NULL DEFAULT '[]',
+    input_warnings TEXT NOT NULL DEFAULT '[]',
+    model_features TEXT NOT NULL DEFAULT '{{}}',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS prediction_events (
+    id {identity},
+    record_id TEXT NOT NULL,
+    produced_at TEXT,
+    part TEXT,
+    part_name TEXT NOT NULL,
+    equip_cd TEXT,
+    equip_name TEXT,
+    supported INTEGER NOT NULL,
+    defect_probability {real},
+    threshold {real} NOT NULL,
+    predicted_label INTEGER,
+    prediction TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    replay_sequence INTEGER,
+    replay_cycle INTEGER,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS prediction_events_created_idx
+    ON prediction_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS prediction_events_equipment_idx
+    ON prediction_events(equip_cd, id DESC);
+
+CREATE TABLE IF NOT EXISTS inspections (
+    id {identity},
+    record_id TEXT NOT NULL UNIQUE,
+    worker_id TEXT NOT NULL,
+    worker_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    actual_label TEXT,
+    defect_type TEXT,
+    checked_items TEXT NOT NULL DEFAULT '[]',
+    action TEXT,
+    additional_inspection INTEGER NOT NULL DEFAULT 0,
+    evaluation TEXT,
+    FOREIGN KEY (record_id) REFERENCES predictions(record_id)
+);
+
+CREATE TABLE IF NOT EXISTS threshold_history (
+    id {identity},
+    previous_threshold {real} NOT NULL,
+    new_threshold {real} NOT NULL,
+    changed_by TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    changed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_registry (
+    id {identity},
+    version TEXT NOT NULL UNIQUE,
+    model_file TEXT NOT NULL,
+    parent_version TEXT,
+    source TEXT NOT NULL,
+    trigger TEXT,
+    reason TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    train_records INTEGER NOT NULL,
+    train_defects INTEGER NOT NULL,
+    added_records INTEGER NOT NULL DEFAULT 0,
+    added_defects INTEGER NOT NULL DEFAULT 0,
+    validated_at TEXT,
+    validation TEXT,
+    threshold_metrics TEXT,
+    active INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+TABLES = (
+    "predictions",
+    "prediction_events",
+    "inspections",
+    "threshold_history",
+    "app_state",
+    "model_registry",
+)
+
+
+class _PostgresConnection:
+    """psycopg 연결을 sqlite3와 같은 모양으로 감싼다.
+
+    쿼리는 SQLite와 Postgres가 함께 읽는 문법으로 쓰고, 자리표시자만 여기서
+    `?`를 `%s`로 바꾼다. 쿼리 문자열 안에 `?`나 `%`를 리터럴로 쓰지 않는다.
+    """
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        return self._connection.execute(sql.replace("?", "%s"), params)
+
+    def executescript(self, sql: str) -> None:
+        self._connection.execute(sql)
+
+
 class Repository:
+    """예측·검사·모델 이력 저장소.
+
+    `DATABASE_URL`이 있으면 Postgres(Supabase), 없으면 로컬 SQLite를 쓴다.
+    방언 차이는 생성 DDL과 아래 속성(정렬 컬럼, LIKE)에만 둔다.
+    """
+
     def __init__(self) -> None:
-        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
         self._lock = Lock()
+        self._pool = None
+        self.is_postgres = bool(DATABASE_URL)
+        # predictions는 record_id가 기본키라 입력 순서를 따로 둔다.
+        # SQLite는 rowid, Postgres는 identity 컬럼 seq.
+        self._order = "seq" if self.is_postgres else "rowid"
+        # SQLite LIKE는 ASCII 대소문자를 무시하고 Postgres LIKE는 구분한다.
+        self._like = "ILIKE" if self.is_postgres else "LIKE"
+        if not self.is_postgres:
+            DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    def _open_pool(self) -> Any:
+        if self._pool is None:
+            from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
+
+            # 연결 풀러(Supavisor)를 거치므로 서버 측 prepared statement는 끈다.
+            self._pool = ConnectionPool(
+                DATABASE_URL,
+                min_size=1,
+                max_size=5,
+                kwargs={"row_factory": dict_row, "prepare_threshold": None},
+                open=True,
+            )
+        return self._pool
 
     @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
+    def connection(self) -> Iterator[Any]:
+        if self.is_postgres:
+            # 풀의 connection()은 정상 종료 시 커밋, 예외 시 롤백한다.
+            with self._open_pool().connection() as connection:
+                yield _PostgresConnection(connection)
+            return
         connection = sqlite3.connect(DATABASE_PATH, timeout=20)
         connection.row_factory = sqlite3.Row
         try:
@@ -28,120 +193,34 @@ class Repository:
             connection.close()
 
     def init(self) -> None:
+        ddl = SCHEMA_SQL.format(
+            identity="BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+            if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT",
+            # Postgres REAL은 단정밀도라 0.163이 0.16300000250339508로 돌아온다.
+            real="DOUBLE PRECISION" if self.is_postgres else "REAL",
+            prediction_seq="seq BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE,"
+            if self.is_postgres else "",
+        )
         with self.connection() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS predictions (
-                    record_id TEXT PRIMARY KEY,
-                    produced_at TEXT,
-                    part TEXT,
-                    part_no TEXT,
-                    part_name TEXT NOT NULL,
-                    equip_cd TEXT,
-                    equip_name TEXT,
-                    supported INTEGER NOT NULL,
-                    unsupported_reason TEXT,
-                    defect_probability REAL,
-                    threshold REAL NOT NULL,
-                    predicted_label INTEGER,
-                    prediction TEXT NOT NULL,
-                    inspection_status TEXT,
-                    model_version TEXT NOT NULL,
-                    process_values TEXT NOT NULL DEFAULT '{}',
-                    predictable INTEGER NOT NULL DEFAULT 1,
-                    missing_features TEXT NOT NULL DEFAULT '[]',
-                    input_warnings TEXT NOT NULL DEFAULT '[]',
-                    model_features TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS prediction_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    record_id TEXT NOT NULL,
-                    produced_at TEXT,
-                    part TEXT,
-                    part_name TEXT NOT NULL,
-                    equip_cd TEXT,
-                    equip_name TEXT,
-                    supported INTEGER NOT NULL,
-                    defect_probability REAL,
-                    threshold REAL NOT NULL,
-                    predicted_label INTEGER,
-                    prediction TEXT NOT NULL,
-                    model_version TEXT NOT NULL,
-                    replay_sequence INTEGER,
-                    replay_cycle INTEGER,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS prediction_events_created_idx
-                    ON prediction_events(created_at DESC);
-                CREATE INDEX IF NOT EXISTS prediction_events_equipment_idx
-                    ON prediction_events(equip_cd, id DESC);
-
-                CREATE TABLE IF NOT EXISTS inspections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    record_id TEXT NOT NULL UNIQUE,
-                    worker_id TEXT NOT NULL,
-                    worker_name TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    actual_label TEXT,
-                    defect_type TEXT,
-                    checked_items TEXT NOT NULL DEFAULT '[]',
-                    action TEXT,
-                    additional_inspection INTEGER NOT NULL DEFAULT 0,
-                    evaluation TEXT,
-                    FOREIGN KEY (record_id) REFERENCES predictions(record_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS threshold_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    previous_threshold REAL NOT NULL,
-                    new_threshold REAL NOT NULL,
-                    changed_by TEXT NOT NULL,
-                    reason TEXT NOT NULL,
-                    changed_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS app_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS model_registry (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    version TEXT NOT NULL UNIQUE,
-                    model_file TEXT NOT NULL,
-                    parent_version TEXT,
-                    source TEXT NOT NULL,
-                    trigger TEXT,
-                    reason TEXT,
-                    created_by TEXT,
-                    created_at TEXT NOT NULL,
-                    train_records INTEGER NOT NULL,
-                    train_defects INTEGER NOT NULL,
-                    added_records INTEGER NOT NULL DEFAULT 0,
-                    added_defects INTEGER NOT NULL DEFAULT 0,
-                    validated_at TEXT,
-                    validation TEXT,
-                    threshold_metrics TEXT,
-                    active INTEGER NOT NULL DEFAULT 0
-                );
-                """
-            )
+            connection.executescript(ddl)
+            if self.is_postgres:
+                # Supabase는 public 스키마를 Data API로 공개한다. RLS를 켜고 정책을 두지
+                # 않으면 공개 키로는 접근할 수 없고, 테이블 소유자인 서버만 읽고 쓴다.
+                connection.executescript(
+                    "".join(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;" for table in TABLES)
+                )
             connection.execute(
-                "INSERT OR IGNORE INTO app_state(key, value) VALUES ('current_threshold', ?)",
+                "INSERT INTO app_state(key, value) VALUES ('current_threshold', ?) ON CONFLICT DO NOTHING",
                 (str(DEFAULT_THRESHOLD),),
             )
             connection.execute(
-                "INSERT OR IGNORE INTO app_state(key, value) VALUES ('demo_cursor', '0')"
+                "INSERT INTO app_state(key, value) VALUES ('demo_cursor', '0') ON CONFLICT DO NOTHING"
             )
             cursor_value = connection.execute(
                 "SELECT value FROM app_state WHERE key = 'demo_cursor'"
             ).fetchone()["value"]
             connection.execute(
-                "INSERT OR IGNORE INTO app_state(key, value) VALUES ('demo_sequence', ?)",
+                "INSERT INTO app_state(key, value) VALUES ('demo_sequence', ?) ON CONFLICT DO NOTHING",
                 (cursor_value,),
             )
 
@@ -211,7 +290,8 @@ class Repository:
             },
         }
         with self.connection() as connection:
-            for table, columns in additions.items():
+            # Postgres 스키마는 처음부터 위 컬럼을 모두 갖고 만들어진다.
+            for table, columns in ({} if self.is_postgres else additions).items():
                 existing = {
                     row["name"]
                     for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
@@ -330,12 +410,12 @@ class Repository:
         with self.connection() as connection:
             if equip_cd:
                 rows = connection.execute(
-                    f"{self.PREDICTION_SELECT} WHERE p.equip_cd = ? ORDER BY p.rowid DESC LIMIT ?",
+                    f"{self.PREDICTION_SELECT} WHERE p.equip_cd = ? ORDER BY p.{self._order} DESC LIMIT ?",
                     (equip_cd, limit),
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    f"{self.PREDICTION_SELECT} ORDER BY p.rowid DESC LIMIT ?", (limit,)
+                    f"{self.PREDICTION_SELECT} ORDER BY p.{self._order} DESC LIMIT ?", (limit,)
                 ).fetchall()
         return [self._prediction_row(row) for row in rows]
 
@@ -373,11 +453,12 @@ class Repository:
         params: list[Any] = []
 
         if keyword:
-            like = f"%{keyword.strip()}%"
+            pattern = f"%{keyword.strip()}%"
+            like = self._like
             conditions.append(
-                "(p.record_id LIKE ? OR p.part_name LIKE ? OR IFNULL(p.part_no, '') LIKE ? OR IFNULL(p.part, '') LIKE ?)"
+                f"(p.record_id {like} ? OR p.part_name {like} ? OR COALESCE(p.part_no, '') {like} ? OR COALESCE(p.part, '') {like} ?)"
             )
-            params.extend([like, like, like, like])
+            params.extend([pattern, pattern, pattern, pattern])
 
         if prediction_state and prediction_state != "all":
             values = self.PREDICTION_STATES.get(prediction_state)
@@ -404,7 +485,7 @@ class Repository:
                 f"SELECT COUNT(*) AS count {join} {where_clause}", params
             ).fetchone()["count"]
             rows = connection.execute(
-                f"{self.PREDICTION_SELECT} {where_clause} ORDER BY p.rowid DESC LIMIT ? OFFSET ?",
+                f"{self.PREDICTION_SELECT} {where_clause} ORDER BY p.{self._order} DESC LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
 
@@ -442,7 +523,7 @@ class Repository:
                 ORDER BY
                     CASE p.inspection_status WHEN '검사 중' THEN 0 ELSE 1 END,
                     p.defect_probability DESC,
-                    p.rowid ASC
+                    p.{self._order} ASC
                 LIMIT ?
                 """,
                 params,
@@ -553,11 +634,12 @@ class Repository:
         with self.connection() as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO model_registry(
+                INSERT INTO model_registry(
                     version, model_file, parent_version, source, trigger, reason,
                     created_by, created_at, train_records, train_defects,
                     added_records, added_defects, active
                 ) VALUES (?, ?, NULL, '초기 배포', NULL, NULL, NULL, ?, ?, ?, 0, 0, 1)
+                ON CONFLICT DO NOTHING
                 """,
                 (version, model_file, now_iso(), train_records, train_defects),
             )
@@ -766,8 +848,9 @@ class Repository:
             )
 
     @staticmethod
-    def _prediction_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _prediction_row(row: Any) -> dict[str, Any]:
         result = dict(row)
+        result.pop("seq", None)
         result["supported"] = bool(result["supported"])
         result["predictable"] = bool(result.get("predictable", 1))
         result["process_values"] = json.loads(result["process_values"] or "{}")
@@ -778,7 +861,7 @@ class Repository:
         return result
 
     @staticmethod
-    def _model_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _model_row(row: Any) -> dict[str, Any]:
         result = dict(row)
         result["active"] = bool(result["active"])
         result["validated"] = bool(result.get("validated_at"))
@@ -788,7 +871,7 @@ class Repository:
         return result
 
     @staticmethod
-    def _inspection_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _inspection_row(row: Any) -> dict[str, Any]:
         result = dict(row)
         result["additional_inspection"] = bool(result.get("additional_inspection"))
         result["checked_items"] = json.loads(result.get("checked_items") or "[]")

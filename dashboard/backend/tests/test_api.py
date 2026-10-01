@@ -715,18 +715,15 @@ def test_predictions_store_the_model_input_features(client):
     조인해 복원했는데 실제 라인에는 그런 파일이 없다.
     """
     import json as _json
-    import sqlite3
 
     from app.model_loader import load_feature_columns
-    from app.settings import DATABASE_PATH
 
     client.post("/demo/reset")
-    connection = sqlite3.connect(DATABASE_PATH)
-    connection.row_factory = sqlite3.Row
-    rows = connection.execute(
-        "SELECT predictable, model_features FROM predictions"
-    ).fetchall()
-    connection.close()
+    # SQLite·Postgres 어느 쪽이든 서버가 쓰는 DB를 그대로 읽는다
+    with repository.connection() as connection:
+        rows = connection.execute(
+            "SELECT predictable, model_features FROM predictions"
+        ).fetchall()
 
     expected = set(load_feature_columns())
     predictable = [row for row in rows if row["predictable"]]
