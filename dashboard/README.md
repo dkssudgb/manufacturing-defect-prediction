@@ -107,6 +107,7 @@ Render 무료 플랜은 디스크가 임시라 재배포·재시작(15분 미접
 - 테이블과 버킷은 서버가 처음 기동할 때 만듭니다. 테이블에는 RLS를 켜고 정책을 두지 않아 공개 키로는 접근할 수 없습니다.
 - Direct connection(`db.<ref>.supabase.co`)은 IPv6 전용이라 Render에서 연결되지 않습니다. Session pooler 주소를 씁니다.
 - 테스트는 운영 DB를 쓰지 않습니다. Postgres로 테스트하려면 `TEST_DATABASE_URL`을 따로 지정합니다.
+- **실시간 반영(Realtime)**: 빌드 환경변수 `VITE_SUPABASE_URL`(Project URL)과 `VITE_SUPABASE_PUBLISHABLE_KEY`(`sb_publishable_...`, 공개용)를 넣으면, 한 화면에서 재생·검사·Threshold·재학습을 하면 열려 있는 다른 화면이 바로 다시 읽습니다. Broadcast 채널 `dashboard-changes`로 "바뀌었다"는 신호만 보내고 데이터는 싣지 않습니다. 값이 없으면(로컬 개발) 신호 없이 동작합니다.
 - `supabase/migrations/001_quality_dashboard.sql`은 로그인 연동용 초안이며 현재 서버 스키마와 다릅니다. 적용하지 않습니다.
 
 ## 검증

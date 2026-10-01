@@ -1,3 +1,5 @@
+import { notifyChange } from "./realtime";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 async function request(path, options = {}) {
@@ -9,7 +11,10 @@ async function request(path, options = {}) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `요청에 실패했습니다. (${response.status})`);
   }
-  return response.json();
+  const data = await response.json();
+  // 상태를 바꾼 요청이 성공하면 다른 화면에 다시 읽으라고 알린다
+  if (options.method && options.method !== "GET") notifyChange();
+  return data;
 }
 
 export const api = {

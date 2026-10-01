@@ -36,6 +36,7 @@ import { Modal } from "./components/Modal";
 import { ProbabilityChart } from "./components/ProbabilityChart";
 import { StatusPill } from "./components/StatusPill";
 import { api } from "./services/api";
+import { onRemoteChange } from "./services/realtime";
 
 const USERS = [
   { id: "manager-01", name: "박품질", role: "품질 관리자", shortRole: "관리자" },
@@ -785,6 +786,26 @@ export default function App() {
   }, [selectedEquipment, trendOffset]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // 다른 화면이 데이터를 바꾸면 Realtime 신호를 받아 다시 읽는다. 재생 중에는 신호가
+  // 1초마다 오는데 loadAll은 1초 가까이 걸릴 수 있다. 읽는 중에 온 신호는 한 번으로
+  // 묶어 끝난 뒤 다시 읽는다.
+  const loadAllRef = useRef(loadAll);
+  useEffect(() => { loadAllRef.current = loadAll; }, [loadAll]);
+  useEffect(() => {
+    let loading = false;
+    let pending = false;
+    const reload = async () => {
+      if (loading) { pending = true; return; }
+      loading = true;
+      try { await loadAllRef.current(); }
+      finally {
+        loading = false;
+        if (pending) { pending = false; reload(); }
+      }
+    };
+    return onRemoteChange(reload);
+  }, []);
   // 07_2 근거표는 고정 자료라 최초 1회만 읽는다.
   useEffect(() => { api.walkforward().then(setWalkforward).catch(() => setWalkforward(null)); }, []);
 
