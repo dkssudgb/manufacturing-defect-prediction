@@ -164,8 +164,20 @@ class Repository:
 
     def _open_pool(self) -> Any:
         if self._pool is None:
+            import psycopg
             from psycopg.rows import dict_row
             from psycopg_pool import ConnectionPool
+
+            # 풀은 실패한 연결을 백그라운드에서 계속 재시도한다. 비밀번호가 틀렸을 때
+            # 그대로 두면 Supabase 풀러가 인증 실패 누적으로 접속을 일시 차단한다.
+            # 먼저 한 번만 붙어보고, 실패하면 바로 기동을 멈춘다.
+            try:
+                psycopg.connect(DATABASE_URL, connect_timeout=15).close()
+            except psycopg.OperationalError as error:
+                raise RuntimeError(
+                    "DATABASE_URL로 Postgres에 연결하지 못했습니다. "
+                    "비밀번호와 Session pooler 주소를 확인하세요."
+                ) from error
 
             # 연결 풀러(Supavisor)를 거치므로 서버 측 prepared statement는 끈다.
             self._pool = ConnectionPool(
