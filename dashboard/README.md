@@ -83,6 +83,19 @@ curl http://127.0.0.1:8001/health
 Get-NetTCPConnection -LocalPort 5173 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 ```
 
+## 배포 (Render)
+
+FastAPI 서버 하나가 API와 React 빌드 결과(`frontend/dist`)를 함께 서빙합니다. 화면은 `/api/...`로 호출하고 서버가 접두어를 떼어 처리하므로, 로컬과 달리 CORS·포트 설정이 필요 없습니다.
+
+- 런타임: Python, 리전 Singapore, 저장소 루트 기준
+- Build: `pip install -r dashboard/backend/requirements.txt && cd dashboard/frontend && npm ci && VITE_API_BASE_URL=/api npm run build`
+- Start: `cd dashboard/backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- 환경변수: `PYTHON_VERSION=3.12.11`
+
+`VITE_API_BASE_URL=/api`는 빌드 명령에서 꼭 지정합니다. 저장소에 있는 `frontend/.env.local`(`127.0.0.1:8001`)이 빌드에도 적용되기 때문입니다.
+
+무료 플랜은 디스크가 임시라 재배포·재시작(15분 미접속 후 깨어날 때 포함) 시 `dashboard_data.db`와 재학습 결과가 사라지고 v1.1.0·250건 재생 상태로 돌아갑니다. 시연 초기화와 같은 상태입니다. 발표 직전에 링크를 한 번 열어 서버를 깨워 둡니다.
+
 ## 검증
 
 ```powershell
@@ -100,7 +113,7 @@ npm run build
 - Threshold별 성능표는 `05_Operating_Point.ipynb`의 5-fold × 3반복 교차검증 결과입니다(검사 물량별 Recall@k · Lift). 같은 기간 교차검증 기준이므로, 생산일 단위로 분할하면 성능이 크게 낮아집니다(`ANALYSIS_RESULTS.md` 11절).
 - 기본 Threshold는 **0.163**(검사 물량 10%, 불량 검출률 79%)이고 허용 범위는 0.079 ~ 0.639입니다. 운영 기준을 바꿀 때는 `backend/app/settings.py`와 `backend/models/model_info.json`을 함께 갱신합니다.
 - 시연 데이터는 센서 결측이 0%인 2020-10-18 ~ 10-22 구간에서 만들었습니다(`backend/scripts/prepare_demo_data.py`).
-- 배포는 포함하지 않았습니다. Python 모델 서버가 필요한 로컬 통합 MVP이며, 프론트와 FastAPI의 배포 대상을 정한 뒤 진행합니다.
+- 배포는 Render 단일 서비스 기준입니다(위 「배포」 절). 로그인이 없으므로 링크를 아는 사람은 누구나 초기화·Threshold 변경·재학습을 할 수 있습니다.
 
 ### 재학습 루프의 경계
 

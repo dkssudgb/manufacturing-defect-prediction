@@ -6,6 +6,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parents[1]
 MODEL_DIR = BACKEND_DIR / "models"
 DATA_DIR = BACKEND_DIR / "data"
+# 배포 시 FastAPI가 함께 서빙하는 React 빌드 결과. 로컬 개발(Vite 5173)에서는 없어도 된다.
+FRONTEND_DIST_DIR = BACKEND_DIR.parent / "frontend" / "dist"
 
 MODEL_PATH = MODEL_DIR / "final_rf_part_balanced.pkl"
 FEATURE_COLUMNS_PATH = MODEL_DIR / "final_feature_columns.pkl"

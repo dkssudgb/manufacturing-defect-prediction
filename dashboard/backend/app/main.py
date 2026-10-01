@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .demo_data import get_demo_data
 from .model_loader import (
@@ -31,6 +32,7 @@ from .settings import (
     AUTO_RETRAIN_ENABLED,
     AUTO_RETRAIN_MIN_LABELS,
     DEMO_SEED_RECORDS,
+    FRONTEND_DIST_DIR,
     INITIAL_MODEL_VERSION,
     KNOWN_EQUIPMENT,
     MAX_THRESHOLD,
@@ -176,6 +178,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class StripApiPrefix:
+    """배포 시 화면과 API를 한 주소에서 서빙한다.
+
+    프론트는 기본값으로 `/api/...`를 호출하고(로컬에서는 Vite 프록시가 접두어를 뗀다),
+    배포에서는 Vite가 없으므로 여기서 같은 일을 한다.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if scope["type"] == "http" and (path == "/api" or path.startswith("/api/")):
+            stripped = path[len("/api"):] or "/"
+            scope = {**scope, "path": stripped, "raw_path": stripped.encode()}
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(StripApiPrefix)
 
 
 @app.get("/health")
@@ -447,3 +470,8 @@ def complete_inspection(record_id: str, payload: InspectionComplete):
 @app.get("/inspections")
 def inspections(limit: int = Query(default=50, ge=1, le=500)):
     return repository.list_inspections(limit)
+
+
+# 라우트를 모두 등록한 뒤 마지막에 붙인다. API 경로와 겹치지 않는 요청만 화면 파일로 간다.
+if FRONTEND_DIST_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST_DIR, html=True), name="frontend")

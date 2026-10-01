@@ -1,5 +1,13 @@
 # data files
-data/
+data/labeled_data.csv
+data/moldset_labeled_cn7.csv
+data/moldset_labeled_rg3.csv
+data/moldset_labeled.csv
+data/moldset_unlabeled_cn7.csv
+data/moldset_unlabeled_rg3.csv
+data/supervised_label_cn7.csv
+data/unlabeled_data.csv
+data/unlabeled_modeling.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
