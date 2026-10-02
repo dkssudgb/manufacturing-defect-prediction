@@ -46,9 +46,12 @@ const USERS = [
 
 const DEFAULT_THRESHOLD = 0.163;
 
-// 시연은 250건이 재생된 상태로 시작하므로 남은 재생은 750건, 약 12분 30초다.
+// 시연은 250건이 재생된 상태로 시작하므로 남은 재생은 750건, 약 6분 15초다.
 // 표본이나 시드 건수(settings.DEMO_SEED_RECORDS)를 바꾸면 이 값도 같이 본다.
-const REPLAY_INTERVAL_MS = 1000;
+//
+// 자동 재생의 한 틱은 재생 요청(/demo/next)만 기다리고 화면 갱신은 기다리지 않는다.
+// 틱이 이 간격보다 오래 걸리면 실제 속도는 재생 요청 시간에 묶인다.
+const REPLAY_INTERVAL_MS = 500;
 
 const EMPTY_SEARCH = { keyword: "", state: "all", from: "", to: "" };
 
@@ -787,38 +790,39 @@ export default function App() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // 다른 화면이 데이터를 바꾸면 Realtime 신호를 받아 다시 읽는다. 재생 중에는 신호가
-  // 1초마다 오는데 loadAll은 1초 가까이 걸릴 수 있다. 읽는 중에 온 신호는 한 번으로
-  // 묶어 끝난 뒤 다시 읽는다.
+  // 자동 재생 틱과 Realtime 신호(다른 화면의 변경)가 함께 쓰는 갱신. 재생 중에는
+  // 0.5초마다 요청이 오는데 loadAll은 1초 가까이 걸릴 수 있다. 읽는 중에 들어온
+  // 요청은 한 번으로 묶어 끝난 뒤 다시 읽으므로 갱신이 겹쳐 쌓이지 않는다.
   const loadAllRef = useRef(loadAll);
   useEffect(() => { loadAllRef.current = loadAll; }, [loadAll]);
-  useEffect(() => {
-    let loading = false;
-    let pending = false;
-    const reload = async () => {
-      if (loading) { pending = true; return; }
-      loading = true;
-      try { await loadAllRef.current(); }
-      finally {
-        loading = false;
-        if (pending) { pending = false; reload(); }
-      }
-    };
-    return onRemoteChange(reload);
+  const reloadState = useRef({ loading: false, pending: false });
+  const requestReload = useCallback(async () => {
+    const state = reloadState.current;
+    if (state.loading) { state.pending = true; return; }
+    state.loading = true;
+    try { await loadAllRef.current(); }
+    finally {
+      state.loading = false;
+      if (state.pending) { state.pending = false; requestReload(); }
+    }
   }, []);
+  useEffect(() => onRemoteChange(requestReload), [requestReload]);
   // 07_2 근거표는 고정 자료라 최초 1회만 읽는다.
   useEffect(() => { api.walkforward().then(setWalkforward).catch(() => setWalkforward(null)); }, []);
 
   const advance = useCallback(async (count = 1, silent = false) => {
     if (busyRef.current) return;
     busyRef.current = true;
-    // 자동 재생(silent)은 1초마다 돌기 때문에 busy를 올렸다 내리면 disabled={busy}가
+    // 자동 재생(silent)은 0.5초마다 돌기 때문에 busy를 올렸다 내리면 disabled={busy}가
     // 걸린 버튼들이 매초 흐려졌다 진해져 깜빡인다. 재진입은 busyRef가 막으므로
     // 자동 재생 중에는 busy를 건드리지 않는다.
     if (!silent) setBusy(true);
     try {
       await api.next(count);
-      await loadAll();
+      // 자동 재생은 화면 갱신을 기다리지 않고 다음 틱으로 넘어간다. 수동 「다음」은
+      // 버튼을 누른 결과가 바로 보여야 하므로 기다린다.
+      if (silent) requestReload();
+      else await loadAll();
     } catch (error) {
       setRunning(false);
       notify(error.message, "error");
@@ -829,7 +833,7 @@ export default function App() {
         setSelected(null);
       }
     }
-  }, [loadAll, notify]);
+  }, [loadAll, notify, requestReload]);
 
   const demoFinished = summary.demo_total > 0 && summary.demo_cursor >= summary.demo_total;
 
